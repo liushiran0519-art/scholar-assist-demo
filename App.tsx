@@ -1,459 +1,283 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import ReactMarkdown from 'react-markdown';
-import { PaperFile, PaperSummary, SidebarTab, ChatMessage, AppMode, PageTranslation, ContentBlock, CitationInfo, AppearanceSettings, Note } from './types';
-import { extractTextFromPdf, extractPageText, fileToBase64 } from './utils/pdfUtils';
-import { generateFingerprint, getSummary, saveSummary, getPageTranslation, savePageTranslation, saveActiveSession, getActiveSession, clearActiveSession } from './utils/storage';
-import { generatePaperSummary, chatWithPaper, translatePageContent, analyzeCitation, explainEquation } from './services/geminiService';
-import { chatWithDeepSeek } from './services/deepseekService';
-import SummaryView from './components/SummaryView';
-import ChatInterface from './components/ChatInterface';
-import Translator from './components/Translator';
-import PDFViewer from './components/PDFViewer';
-import TranslationViewer from './components/TranslationViewer';
-import { UploadIcon, BookOpenIcon, XIcon, SettingsIcon, GripVerticalIcon, StarIcon } from './components/IconComponents';
-import { ScholarCatMascot, CatMood } from './components/ScholarCatMascot';
+import { PaperSummary, PageTranslation, CitationInfo, ChatMessage } from "../types";
 
+// ================= 配置区域 =================
 
-const App: React.FC = () => {
-  const [mode, setMode] = useState<AppMode>(AppMode.UPLOAD);
-  const [file, setFile] = useState<PaperFile | null>(null);
-  const [fileFingerprint, setFileFingerprint] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<SidebarTab | 'DUAL'>('DUAL');
-  const [aiModel, setAiModel] = useState<'gemini' | 'deepseek'>('gemini');
+// 1. 读取环境变量 (适配 Vercel 反代)
+const API_KEY = import.meta.env.VITE_PROXY_API_KEY;
+
+// 2. 指定模型名称
+const MODEL_NAME = '[贩子死妈]gemini-3-flash-preview'; 
+
+// ================= 工具函数 =================
+
+/**
+ * 🧹 强力清洗函数：专门对付话痨 AI
+ * 无论 AI 在 JSON 前面加了多少废话，这个函数都能把 JSON 抠出来
+ */
+function cleanAndParseJson(text: string): any {
+  if (!text) throw new Error("Empty response");
+
+  // 1. 先把 Markdown 代码块标记去掉
+  let clean = text.replace(/```json/g, '').replace(/```/g, '');
   
-  // PDF State
-  const [currentPage, setCurrentPage] = useState(1);
-  const [debouncedPage, setDebouncedPage] = useState(1);
-  const [highlightText, setHighlightText] = useState<string | null>(null);
-
-  // Layout State
-  const [leftWidth, setLeftWidth] = useState(50);
-  const isResizing = useRef(false);
-  const pdfContainerRef = useRef<HTMLDivElement>(null);
-
-  // Settings
-  const [showSettings, setShowSettings] = useState(false);
-  const [appearance, setAppearance] = useState<AppearanceSettings>({
-    theme: 'sepia',
-    fontSize: 16,
-    fontFamily: 'serif'
-  });
-
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [summary, setSummary] = useState<PaperSummary | null>(null);
-  const [fullText, setFullText] = useState<string>(""); // 用于 Chat 上下文
-  const [isSummarizing, setIsSummarizing] = useState(false);
+  // 2. 寻找最外层的 {} (最关键的一步)
+  const firstOpen = clean.indexOf('{');
+  const lastClose = clean.lastIndexOf('}');
   
-  // Translation State
-  const [pageTranslations, setPageTranslations] = useState<Map<number, PageTranslation>>(new Map());
-  const [isTranslatingPage, setIsTranslatingPage] = useState(false);
-
-  // Overlays
-  const [citationInfo, setCitationInfo] = useState<CitationInfo | null>(null);
-  const [equationExplanation, setEquationExplanation] = useState<string | null>(null);
-  const [isAnalyzingCitation, setIsAnalyzingCitation] = useState(false);
-  const [isAnalyzingEquation, setIsAnalyzingEquation] = useState(false);
-
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [isChatting, setIsChatting] = useState(false);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-
-  // Scholar Cat State (新增)
-  const [catMood, setCatMood] = useState<CatMood>('IDLE');
-  const [catMessage, setCatMessage] = useState<string | null>(null);
-
-  // --- 1. Session Restoration (App Mount) ---
-  useEffect(() => {
-    const restoreSession = async () => {
-      try {
-        const session = await getActiveSession();
-        if (session && session.file) {
-          console.log("[Session] Found previous session:", session.file.name);
-          setFile(session.file);
-          setFileFingerprint(session.fingerprint);
-          setCurrentPage(session.currentPage || 1);
-          setDebouncedPage(session.currentPage || 1);
-          setMode(AppMode.READING);
-          
-          // Restore Summary silently
-          const cachedData = await getSummary(session.fingerprint);
-          if (cachedData) {
-            setSummary(cachedData.summary);
-            setFullText(cachedData.fullText || "");
-          }
-        }
-      } catch (e) {
-        console.error("Session restore failed", e);
-      }
-    };
-    restoreSession();
-  }, []);
-
-  // --- 2. Save Session on Change ---
-  useEffect(() => {
-    if (file && fileFingerprint) {
-      // 这里的防抖是为了不频繁写入 IndexedDB
-      const handler = setTimeout(() => {
-        saveActiveSession(file, fileFingerprint, debouncedPage);
-      }, 1000);
-      return () => clearTimeout(handler);
-    }
-  }, [file, fileFingerprint, debouncedPage]);
-
-
-  // --- 3. Debounce Page Change ---
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedPage(currentPage);
-    }, 500); // 500ms debounce
-    return () => clearTimeout(handler);
-  }, [currentPage]);
-
-
-  // --- 4. Main Translation Logic (Text-Based & Cached) ---
-  // 核心改动：完全依赖 useEffect 监听页码变化，而非等待 Canvas 渲染
-  useEffect(() => {
-    const loadTranslation = async () => {
-      if (mode !== AppMode.READING || !file || !fileFingerprint) return;
-      
-      const pageNum = debouncedPage;
-
-      // A. Check Memory State first
-      if (pageTranslations.has(pageNum)) return;
-
-      setIsTranslatingPage(true);
-
-      try {
-        // B. Check IndexedDB Cache
-        const cachedTrans = await getPageTranslation(fileFingerprint, pageNum);
-        
-        if (cachedTrans) {
-          console.log(`[Cache] 📖 Page ${pageNum} Hit (DB)`);
-          setPageTranslations(prev => new Map(prev).set(pageNum, cachedTrans));
-        } else {
-          // C. API Call (Text Extraction -> AI)
-          console.log(`[API] ⚡ Extracting text & Translating Page ${pageNum}...`);
-          
-          // 1. Extract Text locally (No Image sending!)
-          const pageText = await extractPageText(file.base64, pageNum);
-          
-          // 2. Call AI with Text
-          const newTrans = await translatePageContent(pageText);
-          newTrans.pageNumber = pageNum;
-
-          // 3. Save to Cache
-          await savePageTranslation(fileFingerprint, pageNum, newTrans);
-          
-          // 4. Update State
-          setPageTranslations(prev => new Map(prev).set(pageNum, newTrans));
-        }
-      } catch (error) {
-        console.error("Translation Error:", error);
-      } finally {
-        setIsTranslatingPage(false);
-      }
-    };
-
-    loadTranslation();
-  }, [debouncedPage, fileFingerprint, mode, file]); // removed pageTranslations dependency to avoid loops
-
-  // --- Scholar Cat Mood Logic (新增) ---
-  useEffect(() => {
-    // 优先级逻辑：错误 > 聊天/思考 > 翻译/搜索 > 摘要 > 闲置
-    if (isChatting) {
-      setCatMood('THINKING');
-      setCatMessage("正在思考你的问题... (Thinking...)");
-    } else if (isTranslatingPage || isSummarizing || isAnalyzingCitation || isAnalyzingEquation) {
-      setCatMood('SEARCHING');
-      setCatMessage("正在解读古卷... (Deciphering...)");
-    } else if (fullText && !summary) {
-        // 如果有文本但没摘要（罕见情况，可能是刚上传完）
-        setCatMood('SUCCESS');
-        setCatMessage("卷轴读取完毕！(Ready!)");
-        setTimeout(() => setCatMessage(null), 3000);
-    } else {
-      setCatMood('IDLE');
-      // 闲置时偶尔清空消息
-      const timer = setTimeout(() => setCatMessage(null), 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [isChatting, isTranslatingPage, isSummarizing, isAnalyzingCitation, isAnalyzingEquation, fullText, summary]);
-
-  // --- File Upload ---
-  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files && event.target.files[0]) {
-      const selectedFile = event.target.files[0];
-      
-      // 1. Basic Setup
-      const base64Data = await fileToBase64(selectedFile);
-      // 使用更稳定的 fingerprint (name + size + lastModified)
-      const fingerprint = await generateFingerprint(selectedFile, selectedFile.name, selectedFile.lastModified);
-      
-      setFileFingerprint(fingerprint);
-
-      const newFile: PaperFile = {
-        name: selectedFile.name,
-        url: URL.createObjectURL(selectedFile),
-        base64: base64Data,
-        mimeType: selectedFile.type
-      };
-
-      setFile(newFile);
-      setMode(AppMode.READING);
-      setCurrentPage(1);
-      setDebouncedPage(1);
-      
-      // 2. Check Cache for Summary
-      try {
-        setIsSummarizing(true);
-        const cachedData = await getSummary(fingerprint);
-        
-        if (cachedData) {
-          console.log(`[Cache] 🎯 Summary hit for ${fingerprint}`);
-          setSummary(cachedData.summary);
-          setFullText(cachedData.fullText || "");
-          setIsSummarizing(false);
-        } else {
-          console.log("[Cache] 💨 Miss. Generating summary...");
-          // Extract Text (Local CPU)
-          const textContent = await extractTextFromPdf(base64Data);
-          setFullText(textContent);
-          
-          // Generate Summary (API - Text Only)
-          const newSummary = await generatePaperSummary(textContent);
-          
-          // Save
-          await saveSummary(fingerprint, selectedFile.name, newSummary, textContent);
-          
-          setSummary(newSummary);
-          setIsSummarizing(false);
-        }
-      } catch (error) {
-        console.error("Processing failed:", error);
-        setSummary({
-          title: "解析失败",
-          tags: ["ERROR"],
-          tldr: { painPoint: "无法读取文件", solution: "请重试或检查文件", effect: "无" },
-          methodology: [],
-          takeaways: []
-        });
-        setIsSummarizing(false);
-      }
-    }
-  };
-
-  // --- Interaction Handlers ---
-  const handleCitationClick = (id: string) => { showToast(`引用跳转暂未实装: ${id}`); };
-  const handleEquationClick = (eq: string) => { showToast("公式: " + eq); }; // Demo behavior
-
-  const handleContextSelection = (text: string, action: 'explain' | 'save') => {
-    if (action === 'explain') {
-      setActiveTab(SidebarTab.CHAT);
-      handleSendMessage(`请通俗解释这段话：\n"${text}"`);
-    } else if (action === 'save') {
-      const newNote: Note = {
-        id: Date.now().toString(),
-        text: text,
-        date: new Date().toLocaleString()
-      };
-      setNotes(prev => [newNote, ...prev]);
-      setActiveTab(SidebarTab.NOTES);
-      showToast("已收藏至魔法笔记！");
-    }
-  };
-
-  const handleSendMessage = async (text: string) => {
-    const newUserMsg: ChatMessage = { role: 'user', text };
-    setChatMessages(prev => [...prev, newUserMsg]);
-    setIsChatting(true);
-    
-    try {
-      let answer = '';
-      if (aiModel === 'deepseek') {
-        const response = await chatWithDeepSeek(text);
-        answer = response || "DeepSeek 没有返回内容";
-      } else {
-        // Pass text context (Summary or current page text) instead of image
-        const context = fullText || "No context available."; 
-        const historyForApi = chatMessages.map(m => ({ role: m.role, text: m.text }));
-        answer = await chatWithPaper(historyForApi, text, context);
-      }
-      setChatMessages(prev => [...prev, { role: 'model', text: answer }]);
-    } catch (err) {
-      setChatMessages(prev => [...prev, { role: 'model', text: "网络请求失败，请检查 API Key。", isError: true }]);
-    } finally {
-      setIsChatting(false);
-    }
-  };
-
-  // 处理小猫点击事件（新增）
-  const handleCatClick = () => {
-    setCatMood('SUCCESS');
-    setCatMessage("喵呜！需要帮忙吗？(Meow!)");
-    setTimeout(() => setCatMood('IDLE'), 2000);
-  };
-
-  const resetApp = async () => {
-    await clearActiveSession(); // Clear session from DB
-    setFile(null);
-    setFileFingerprint(null);
-    setMode(AppMode.UPLOAD);
-    setSummary(null);
-    setChatMessages([]);
-    setPageTranslations(new Map());
-    setCurrentPage(1);
-    setDebouncedPage(1);
-  };
-  
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 2000);
-  };
-
-  // Resizing logic (omitted for brevity, same as before)
-  const startResizing = useCallback(() => { isResizing.current = true; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'; }, []);
-  const stopResizing = useCallback(() => { isResizing.current = false; document.body.style.cursor = ''; document.body.style.userSelect = ''; }, []);
-  const resize = useCallback((e: MouseEvent) => {
-    if (isResizing.current) {
-      const newWidth = (e.clientX / window.innerWidth) * 100;
-      if (newWidth > 20 && newWidth < 80) setLeftWidth(newWidth);
-    }
-  }, []);
-  useEffect(() => {
-    window.addEventListener('mousemove', resize);
-    window.addEventListener('mouseup', stopResizing);
-    return () => { window.removeEventListener('mousemove', resize); window.removeEventListener('mouseup', stopResizing); };
-  }, [resize, stopResizing]);
-
-  if (mode === AppMode.UPLOAD) {
-    // ... UPLOAD UI (Keep exact same as before)
-    return (
-       <div className="min-h-screen bg-[#2c1810] flex flex-col items-center justify-center p-4 relative overflow-hidden">
-        {/* Simplified Background for brevity */}
-        <div className="max-w-xl w-full text-center space-y-8 animate-in fade-in duration-700 relative z-10">
-          <div>
-             <div className="bg-[#8B4513] w-20 h-20 mx-auto flex items-center justify-center mb-6 rpg-border shadow-[4px_4px_0_0_#1a0f0a]">
-              <BookOpenIcon className="text-[#DAA520] w-10 h-10" />
-            </div>
-            <h1 className="text-4xl font-bold text-[#e8e4d9] mb-3 pixel-font">Scholar Scroll</h1>
-            <p className="text-lg text-[#DAA520] serif italic">研读卷轴 · 解锁古老知识的秘密</p>
-          </div>
-
-          <div className="bg-[#e8e4d9] p-10 rpg-border hover:brightness-110 transition-all cursor-pointer group relative shadow-[8px_8px_0_0_#1a0f0a]">
-            <input type="file" accept=".pdf" onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-            <div className="space-y-4">
-              <div className="w-16 h-16 bg-[#2c1810] rounded-full flex items-center justify-center mx-auto border-2 border-[#DAA520]">
-                <UploadIcon className="w-8 h-8 text-[#DAA520]" />
-              </div>
-              <p className="font-bold text-lg text-[#2c1810] pixel-font">召唤 PDF 卷轴</p>
-            </div>
-          </div>
-          <div className="text-[#8B4513] text-xs serif italic">* 自动缓存：刷新页面不会丢失进度</div>
-        </div>
-      </div>
-    );
+  // 如果找不到括号，说明生成的根本不是 JSON
+  if (firstOpen === -1 || lastClose === -1) {
+      throw new Error("AI 未返回有效的 JSON 格式");
   }
 
-  return (
-    <div className={`flex flex-col h-screen overflow-hidden font-sans ${appearance.theme === 'sepia' ? 'bg-[#F4ECD8]' : 'bg-[#2c1810]'}`}>
-      
-      {/* Header */}
-      <div className={`h-16 border-b-4 flex items-center px-4 justify-between shrink-0 shadow-lg z-50 ${appearance.theme === 'sepia' ? 'bg-[#e8e4d9] border-[#8B4513]' : 'bg-[#2c1810] border-[#8B4513]'}`}>
-         <div className="flex items-center gap-3">
-           <div className="bg-[#DAA520] p-1 border-2 border-[#e8e4d9]">
-             <BookOpenIcon className="w-6 h-6 text-[#2c1810]" />
-           </div>
-           <span className="font-bold pixel-font text-xs tracking-widest hidden md:block text-[#8B4513]">SCHOLAR SCROLL</span>
-           <span className="h-6 w-1 bg-[#8B4513] mx-2"></span>
-           <span className="text-xs font-bold text-[#DAA520] truncate max-w-[200px] pixel-font">{file?.name}</span>
-         </div>
-         {/* ... (Keep existing Header buttons: Settings, Tabs, Close) */}
-         <div className="flex gap-2 items-center">
-            <button onClick={() => setShowSettings(!showSettings)} className="p-2 border-2 border-[#DAA520] text-[#DAA520]"><SettingsIcon className="w-5 h-5"/></button>
-            {/* Settings Dropdown omitted for brevity, stick to original logic */}
-            <button onClick={resetApp} className="text-[#e8e4d9] hover:text-red-400 p-2"><XIcon className="w-6 h-6" /></button>
-         </div>
-      </div>
+  // 3. 只截取 { ... } 中间的部分
+  const jsonStr = clean.substring(firstOpen, lastClose + 1);
 
-      {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden relative">
-        
-        {/* LEFT: PDF Viewer */}
-        <div className="h-full relative bg-[#5c4033]" style={{ width: `${leftWidth}%` }}>
-          {file && (
-             <PDFViewer 
-               ref={pdfContainerRef}
-               fileUrl={file.url}
-               pageNumber={currentPage}
-               onPageChange={setCurrentPage}
-               onPageRendered={() => {}} // Removed dependency on render for API
-               highlightText={highlightText}
-               onTextSelected={handleContextSelection}
-             />
-          )}
-        </div>
+  try {
+    return JSON.parse(jsonStr);
+  } catch (error) {
+    console.error("JSON 解析失败，原始文本:", text);
+    throw new Error("JSON 格式错误");
+  }
+}
 
-        {/* Resizer */}
-        <div 
-           className="w-2 bg-[#2c1810] border-l border-r border-[#8B4513] cursor-col-resize hover:bg-[#DAA520] z-40"
-           onMouseDown={startResizing}
-        >
-          <GripVerticalIcon className="w-4 h-4 text-[#8B4513] mt-[50vh]" />
-        </div>
+/**
+ * 通用 Fetch 请求封装 (指向 /api/proxy)
+ */
+async function callProxyApi(messages: any[], jsonMode = false) {
+  if (!API_KEY) {
+    console.error("❌ 反代配置缺失！请在 .env 中设置 VITE_PROXY_API_KEY");
+    throw new Error("API Key missing");
+  }
 
-        {/* RIGHT: AI Panels */}
-        <div className="h-full relative" style={{ width: `${100 - leftWidth}%`, backgroundColor: appearance.theme === 'sepia' ? '#F4ECD8' : '#2c1810' }}>
-          
-          {activeTab === 'DUAL' && (
-             <TranslationViewer 
-               translation={pageTranslations.get(debouncedPage)}
-               isLoading={isTranslatingPage}
-               onHoverBlock={setHighlightText}
-               onRetry={() => {
-                   // Manual Retry: Remove from cache and state to trigger useEffect
-                   setPageTranslations(prev => {
-                       const newMap = new Map(prev);
-                       newMap.delete(debouncedPage);
-                       return newMap;
-                   });
-               }}
-               onCitationClick={handleCitationClick}
-               onEquationClick={handleEquationClick}
-               appearance={appearance}
-             />
-          )}
+  const headers = {
+    "Content-Type": "application/json",
+    "Authorization": `Bearer ${API_KEY}`
+  };
 
-          {activeTab === SidebarTab.SUMMARY && (
-             <div className="p-0 h-full overflow-y-auto bg-[#f4ecd8]">
-               <SummaryView summary={summary} isLoading={isSummarizing} error={null} />
-             </div>
-          )}
-          
-          {activeTab === SidebarTab.CHAT && (
-             <ChatInterface messages={chatMessages} onSendMessage={handleSendMessage} isSending={isChatting} />
-          )}
+  const body: any = {
+    model: MODEL_NAME,
+    messages: messages,
+    stream: false,
+    temperature: 0.7
+  };
 
-          {activeTab === SidebarTab.NOTES && (
-            <div className="p-6 h-full overflow-y-auto bg-[#e8e4d9] space-y-4">
-              <h3 className="font-bold pixel-font text-[#2c1810]">魔法笔记 (Saved Notes)</h3>
-              {notes.map(note => (
-                 <div key={note.id} className="bg-[#fffef0] p-3 border-2 border-[#8B4513] rounded">
-                    <p className="text-[#2c1810] serif text-sm">{note.text}</p>
-                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-        
-        {/* Scholar Cat Mascot (Replced Toast) */}
-        <ScholarCatMascot 
-          mood={catMood} 
-          message={catMessage || toastMessage} 
-          onClick={handleCatClick}
-        />
-      </div>
-    </div>
-  );
+  // 如果需要强制 JSON 输出
+  if (jsonMode) {
+    body.response_format = { type: "json_object" };
+  }
+
+  try {
+    // 强制指向 Vercel 本地反代路径
+    const response = await fetch('/api/proxy', {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      throw new Error(`API Error ${response.status}: ${errData.error?.message || response.statusText}`);
+    }
+
+    const data = await response.json();
+    
+    // 兼容性检查
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+        throw new Error("服务返回了空数据");
+    }
+
+    return data.choices[0].message.content;
+
+  } catch (error) {
+    console.error("Proxy Request Failed:", error);
+    throw error;
+  }
+}
+
+// ================= 核心业务函数 =================
+
+/**
+ * 1. 生成论文摘要
+ */
+export const generatePaperSummary = async (fullText: string): Promise<PaperSummary> => {
+  const truncatedText = fullText.slice(0, 30000);
+
+  const prompt = `
+    Role: You are the pixel library guardian "Scholar Cat" (学术猫).
+    Task: Analyze this academic paper text and generate a structured summary.
+    
+    Text Input (Excerpt): 
+    "${truncatedText}"
+    
+    Return a JSON object in CHINESE (简体中文) with the following structure:
+    {
+      "title": "Translated title",
+      "tags": ["tag1", "tag2", "tag3"],
+      "tldr": { 
+        "painPoint": "what problem (metaphor)", 
+        "solution": "what method", 
+        "effect": "result" 
+      },
+      "methodology": [
+        { "step": "Step Name", "desc": "Description" }
+      ],
+      "takeaways": ["insight 1", "insight 2"]
+    }
+  `;
+
+  try {
+    const responseText = await callProxyApi([{ role: "user", content: prompt }], true);
+    // ✅ 使用强力解析
+    return cleanAndParseJson(responseText) as PaperSummary;
+  } catch (error) {
+    console.error("Summary generation failed:", error);
+    return {
+      title: "解读中断",
+      tags: ["系统维护中"],
+      tldr: { painPoint: "连接不稳定", solution: "请重试", effect: "暂无数据" },
+      methodology: [],
+      takeaways: []
+    };
+  }
 };
 
-export default App;
+/**
+ * 2. 翻译页面内容 (这里是刚才报错的地方！)
+ */
+export const translatePageContent = async (pageText: string): Promise<PageTranslation> => {
+  if (!pageText || pageText.trim().length < 10) {
+     return {
+       pageNumber: 0,
+       blocks: [{ type: 'paragraph', en: '', cn: '此页面似乎为空白或只有图片。' }],
+       glossary: []
+     };
+  }
+
+  const prompt = `
+    Analyze this page text of an academic paper.
+    1. Identify main content blocks.
+    2. Translate them into academic Chinese.
+    3. Identify key terms for glossary.
+
+    Input Text:
+    """
+    ${pageText.slice(0, 5000)}
+    """
+
+    Return JSON format:
+    {
+      "blocks": [
+        { "type": "paragraph|heading|list", "en": "original text", "cn": "translated text" }
+      ],
+      "glossary": [
+        { "term": "Term", "definition": "Chinese Definition" }
+      ]
+    }
+  `;
+
+  try {
+    const responseText = await callProxyApi([{ role: "user", content: prompt }], true);
+    // ✅ 关键修复：这里原来是 JSON.parse，现在换成 cleanAndParseJson
+    const data = cleanAndParseJson(responseText);
+    
+    return {
+      pageNumber: 0,
+      blocks: data.blocks || [],
+      glossary: data.glossary || []
+    };
+  } catch (error) {
+    console.error("Translation failed:", error);
+    // 返回一个优雅的错误提示块，而不是崩坏页面
+    return {
+      pageNumber: 0,
+      blocks: [{ type: "paragraph", en: "Translation Error", cn: "喵呜！这页纸太难懂了，翻译魔法失效了... (解析错误)" }],
+      glossary: []
+    };
+  }
+};
+
+/**
+ * 3. 对话功能
+ */
+export const chatWithPaper = async (
+  history: { role: 'user' | 'model'; text: string }[], 
+  newMessage: string, 
+  contextText: string
+): Promise<string> => {
+  
+  const systemPrompt = `
+    你是“Scholar Cat (学术猫)”。
+    任务：基于提供的论文片段回答问题。
+    风格：活泼可爱，句尾带 [=^..^=]。
+  `;
+
+  const messages = [
+    { role: "system", content: systemPrompt },
+    {
+       role: "user",
+       content: `Context (Paper content):\n${contextText.slice(0, 10000)}\n\nUser Question: ${newMessage}`
+    },
+    ...history.slice(-4).map(h => ({
+      role: h.role === 'model' ? 'assistant' : 'user',
+      content: h.text
+    }))
+  ];
+
+  try {
+    return await callProxyApi(messages, false);
+  } catch (error) {
+    return "喵呜！魔法连接断开了... 请稍后再试 [=T_T=]";
+  }
+};
+
+/**
+ * 4. 引用分析
+ */
+export const analyzeCitation = async (citationId: string, contextText: string): Promise<CitationInfo> => {
+    const prompt = `
+        Find the citation labelled "${citationId}" in the text below. 
+        Extract Title, Year, and infer Context. 
+        Decide if it is "MUST_READ" or "SKIMMABLE".
+        
+        Text:
+        ${contextText.slice(0, 5000)}
+        
+        Return JSON: { "id", "title", "year", "abstract", "status" }
+    `;
+
+    try {
+        const text = await callProxyApi([{ role: "user", content: prompt }], true);
+        // ✅ 使用强力解析
+        return cleanAndParseJson(text);
+    } catch (error) {
+        return { id: citationId, title: "未知文献", year: "?", abstract: "无法提取", status: "SKIMMABLE" };
+    }
+};
+
+/**
+ * 5. 解释公式
+ */
+export const explainEquation = async (equationText: string): Promise<string> => {
+    try {
+        const text = await callProxyApi([
+            { role: "user", content: `Explain this equation in simple Chinese: ${equationText}` }
+        ], false);
+        return text;
+    } catch (error) {
+        return "无法解释此公式。";
+    }
+};
+
+/**
+ * 6. 划词翻译
+ */
+export const translateSelection = async (text: string): Promise<string> => {
+    try {
+        return await callProxyApi([
+            { role: "system", content: "Translate to Chinese. Concise." },
+            { role: "user", content: text }
+        ], false);
+    } catch (error) {
+        return "翻译失败";
+    }
+};
