@@ -16,7 +16,7 @@ export default async function handler(req, res) {
 
   // 2. 准备转发的目标地址
   // 你的服务商地址 (这里写死，确保不出错)
-  const TARGET_URL = "https://fanzisima.xyz/v1/chat/completions";
+  const TARGET_URL = "https://ag.beijixingxing.com/v1/chat/completions";
 
   try {
     // 3. 发起伪装请求
