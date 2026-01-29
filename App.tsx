@@ -25,7 +25,7 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [debouncedPage, setDebouncedPage] = useState(1);
   const [highlightText, setHighlightText] = useState<string | null>(null);
-  const [pdfSelectedText, setPdfSelectedText] = useState<string | null>(null);
+  const [pdfSelectedText, setPdfSelectedText] = useState<string | null>(null); // 新增：PDF 选中的文本
 
   // Layout State
   const [leftWidth, setLeftWidth] = useState(50);
@@ -201,7 +201,7 @@ const App: React.FC = () => {
       
       try {
         setIsSummarizing(true);
-        // 【问题2修复】：上传时立即保存基础信息到历史，确保即使立即退出也有记录
+        // 上传时立即保存基础信息到历史，确保即使立即退出也有记录
         await saveFileToHistory(fingerprint, newFile);
 
         const existingRecord = await getFileFromHistory(fingerprint);
@@ -286,9 +286,6 @@ const App: React.FC = () => {
     setSummary(null); // 清空以显示 Loading
     
     try {
-      // 重新提取全文（防止第一次提取为空）
-      // 注意：如果是大文件，这里可能还是会慢，但为了重试必须这样做
-      // 如果 storageService 已经存了 fullText，可以先读出来判断
       let text = await extractTextFromPdf(file.base64);
       if (!text || text.length < 100) {
          throw new Error("Text extraction failed");
@@ -297,7 +294,6 @@ const App: React.FC = () => {
       const newSummary = await generatePaperSummary(text);
       setSummary(newSummary);
       
-      // 更新历史记录（如果有指纹）
       if (fileFingerprint) {
          await updateSummaryInHistory(fileFingerprint, newSummary);
       }
@@ -337,10 +333,7 @@ const App: React.FC = () => {
   };
 
   const handleContextSelection = (text: string, action: 'explain' | 'save') => {
-    if (action === 'highlight') {
-        setPdfSelectedText(text);
-        return;
-    }
+    // 移除 action === 'highlight'，改用 onTextHover 处理，保持类型清洁
     if (action === 'explain') {
       setActiveTab(SidebarTab.CHAT);
       handleSendMessage(`请通俗解释这段话：\n"${text}"`);
@@ -373,9 +366,7 @@ const App: React.FC = () => {
     }
   };
 
-  // --- 【问题2修复】返回书架逻辑 ---
   const goBackToBookshelf = async () => {
-    // 退出前，强制保存当前状态到历史记录，防止数据丢失
     if (file && fileFingerprint) {
         await saveFileToHistory(fileFingerprint, file, fullText, summary);
     }
@@ -384,7 +375,7 @@ const App: React.FC = () => {
     setFile(null);
     setFileFingerprint(null);
     setMode(AppMode.UPLOAD);
-    loadHistoryList(); // 重新加载列表
+    loadHistoryList(); 
   };
   
   const showToast = (msg: string) => {
@@ -511,7 +502,6 @@ const App: React.FC = () => {
                 </div>
             )}
 
-            {/* ✅ 【问题1修复】返回书架按钮：颜色根据主题动态变化 */}
             <button 
               onClick={goBackToBookshelf} 
               className={`p-2 flex items-center gap-1 border border-transparent rounded transition-colors 
@@ -536,8 +526,9 @@ const App: React.FC = () => {
                pageNumber={currentPage}
                onPageChange={setCurrentPage}
                onPageRendered={() => {}} 
-               highlightText={highlightText}
+               highlightText={highlightText} // 接收：来自 Translation 的高亮请求
                onTextSelected={handleContextSelection}
+               onTextHover={setPdfSelectedText} // 发送：通知 Translation 进行高亮
              />
           )}
         </div>
@@ -555,9 +546,9 @@ const App: React.FC = () => {
                <TranslationViewer 
                translation={pageTranslations.get(debouncedPage)}
                isLoading={isTranslatingPage}
-               onHoverBlock={setHighlightText}
+               onHoverBlock={setHighlightText} // 发送：通知 PDF 高亮
+               highlightText={pdfSelectedText} // 接收：来自 PDF 的选中/悬停文字
                onRetry={async () => {
-                   // 1. 核心：从 Map 中删除当前页，否则 processCanvas 会以为已经缓存了
                    setPageTranslations(prev => {
                        const newMap = new Map(prev);
                        newMap.delete(debouncedPage);
@@ -572,7 +563,6 @@ const App: React.FC = () => {
 
           {activeTab === SidebarTab.SUMMARY && (
              <div className="p-0 h-full overflow-y-auto bg-[#e8e4d9]">
-               {/* 确保传递 retrySummary 函数 */}
                <SummaryView 
                   summary={summary} 
                   isLoading={isSummarizing} 
