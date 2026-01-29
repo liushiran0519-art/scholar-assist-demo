@@ -25,6 +25,7 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [debouncedPage, setDebouncedPage] = useState(1);
   const [highlightText, setHighlightText] = useState<string | null>(null);
+  const [pdfSelectedText, setPdfSelectedText] = useState<string | null>(null);
 
   // Layout State
   const [leftWidth, setLeftWidth] = useState(50);
@@ -336,6 +337,10 @@ const App: React.FC = () => {
   };
 
   const handleContextSelection = (text: string, action: 'explain' | 'save') => {
+    if (action === 'highlight') {
+        setPdfSelectedText(text);
+        return;
+    }
     if (action === 'explain') {
       setActiveTab(SidebarTab.CHAT);
       handleSendMessage(`请通俗解释这段话：\n"${text}"`);
