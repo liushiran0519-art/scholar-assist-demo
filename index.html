@@ -11,166 +11,190 @@
       body {
         font-family: 'Inter', system-ui, -apple-system, sans-serif;
         background-color: #2c1810; /* Dark background behind the scroll */
+        margin: 0;
+        overflow: hidden;
       }
-      .serif {
-        font-family: 'Noto Serif SC', serif;
+      .serif { font-family: 'Noto Serif SC', serif; }
+      .pixel-font { font-family: 'Press Start 2P', cursive; }
+      
+      /* --- 核心：RPG 加载页样式 --- */
+      #app-loader {
+        position: fixed;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background-color: #2c1810;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        transition: opacity 0.5s ease-out;
       }
-      .pixel-font {
+
+      /* 像素猫跳动 */
+      .pixel-cat-loader {
+        font-size: 60px;
+        margin-bottom: 20px;
+        animation: cat-bounce 0.8s infinite alternate steps(2);
+      }
+
+      @keyframes cat-bounce {
+        0% { transform: translateY(0); }
+        100% { transform: translateY(-10px); }
+      }
+
+      /* 复古文字 */
+      .loading-text {
         font-family: 'Press Start 2P', cursive;
+        color: #DAA520; /* Gold */
+        font-size: 14px;
+        margin-bottom: 24px;
+        text-shadow: 2px 2px #000;
+        letter-spacing: 2px;
       }
       
-      /* Custom scrollbar - Retro Style */
-      ::-webkit-scrollbar {
-        width: 12px;
-        height: 12px;
+      /* 动态省略号 */
+      .loading-dots::after {
+        content: '.';
+        animation: dots 1.5s steps(5, end) infinite;
       }
-      ::-webkit-scrollbar-track {
-        background: #e8e4d9; 
-        border-left: 2px solid #2c1810;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #8B4513; 
-        border: 2px solid #e8e4d9;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #A0522D; 
+      @keyframes dots {
+        0%, 20% { content: '.'; }
+        40% { content: '..'; }
+        60% { content: '...'; }
+        80%, 100% { content: ''; }
       }
 
-      /* --- PDF LAYER STACKING CONTEXT (CRITICAL FOR SELECTION) --- */
-      /* 1. Canvas: The image (Bottom) */
-      .react-pdf__Page__canvas {
-        display: block;
-        user-select: none;
-        z-index: 1; 
-      }
-
-      /* 2. Highlights: Injected via React (Middle - z-10) */
-      /* See PDFViewer.tsx for the z-10 class on highlight container */
-
-      /* 3. Text Layer: Transparent text for selection (Top of Highlights) */
-      .react-pdf__Page__textContent {
-        position: absolute;
-        top: 0;
-        left: 0;
-        transform-origin: 0 0;
-        color: transparent;
-        line-height: 1;
-        pointer-events: all; /* Allow mouse interaction */
-        user-select: text;   /* Force selectable */
-        z-index: 20;         /* Above canvas(1) and highlights(10) */
-      }
-      
-      .react-pdf__Page__textContent span {
-        position: absolute;
-        white-space: pre;
-        cursor: text;
-        transform-origin: 0% 0%;
-      }
-
-      /* 4. Annotations: Links (Very Top) */
-      .react-pdf__Page__annotations {
-        position: absolute;
-        top: 0;
-        left: 0;
-        transform-origin: 0 0;
-        pointer-events: auto; /* Enable clicks */
-        z-index: 30;          /* Above text layer(20) */
-      }
-      
-      .react-pdf__Page__annotations .annotationLayer section {
-        position: absolute;
-        text-align: center;
-        top: 0;
-        left: 0;
-        transform-origin: 0 0;
-        white-space: pre;
-        pointer-events: none;
-      }
-      
-      .react-pdf__Page__annotations .linkAnnotation > a {
-        position: absolute;
-        font-size: 1em;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        background: transparent !important; /* FIX: Force Transparent */
-        cursor: pointer;
-        pointer-events: auto; /* Capture clicks */
-        transition: background 0.2s;
-      }
-      
-      .react-pdf__Page__annotations .linkAnnotation > a:hover {
-        background: rgba(218, 165, 32, 0.2) !important; /* Highlight only on hover */
-        border: 2px solid #DAA520;
-        box-sizing: border-box;
-      }
-
-      /* RPG Pixel Borders */
-      .rpg-border {
+      /* RPG 进度条容器 */
+      .rpg-progress-container {
+        width: 300px;
+        height: 24px;
+        background-color: #4a3c31;
+        position: relative;
+        /* 像素边框效果 */
         box-shadow: 
-          -4px 0 0 0 #2c1810,
-          4px 0 0 0 #2c1810,
-          0 -4px 0 0 #2c1810,
-          0 4px 0 0 #2c1810;
-        margin: 4px;
-        background-color: #f5f2e9;
-      }
-      
-      .rpg-btn {
-        background-color: #DAA520;
-        color: #2c1810;
-        border: 2px solid #2c1810;
-        box-shadow: 2px 2px 0px 0px #2c1810;
-        transition: transform 0.1s;
-      }
-      .rpg-btn:active {
-        transform: translate(2px, 2px);
-        box-shadow: 0px 0px 0px 0px #2c1810;
+          -4px 0 0 0 #000,
+          4px 0 0 0 #000,
+          0 -4px 0 0 #000,
+          0 4px 0 0 #000;
+        padding: 4px;
       }
 
-      .rpg-panel {
-        background-color: #e8e4d9;
-        border: 4px solid #2c1810;
+      /* 进度条填充 - 带条纹动画 */
+      .rpg-progress-bar {
+        height: 100%;
+        width: 0%;
+        background-color: #DAA520;
+        background-image: linear-gradient(
+          45deg,
+          rgba(255, 255, 255, .2) 25%,
+          transparent 25%,
+          transparent 50%,
+          rgba(255, 255, 255, .2) 50%,
+          rgba(255, 255, 255, .2) 75%,
+          transparent 75%,
+          transparent
+        );
+        background-size: 20px 20px;
+        animation: 
+          fill-up 2s ease-out forwards,
+          stripes 1s linear infinite;
         position: relative;
       }
-      
-      .rpg-panel::after {
-        content: "";
-        position: absolute;
-        top: -4px; left: -4px; right: -4px; bottom: -4px;
-        box-shadow: inset 0 0 0 4px #e8e4d9, inset 0 0 0 8px #2c1810;
-        pointer-events: none;
+
+      /* 假进度动画：先快后慢，最后停在 90% 等 React 加载 */
+      @keyframes fill-up {
+        0% { width: 0%; }
+        50% { width: 70%; }
+        100% { width: 90%; }
       }
 
-      /* Tooltip Animation */
-      @keyframes float-up {
-        0% { opacity: 0; transform: translateY(10px); }
-        100% { opacity: 1; transform: translateY(0); }
+      @keyframes stripes {
+        from { background-position: 0 0; }
+        to { background-position: 40px 0; }
       }
-      .tooltip-anim {
-        animation: float-up 0.2s ease-out forwards;
-      }
+
+      /* --- 之前你已有的样式保留 --- */
+      ::-webkit-scrollbar { width: 12px; height: 12px; }
+      ::-webkit-scrollbar-track { background: #e8e4d9; border-left: 2px solid #2c1810; }
+      ::-webkit-scrollbar-thumb { background: #8B4513; border: 2px solid #e8e4d9; }
+      ::-webkit-scrollbar-thumb:hover { background: #A0522D; }
+      
+      .react-pdf__Page__canvas { display: block; user-select: none; z-index: 1; }
+      .react-pdf__Page__textContent { position: absolute; top: 0; left: 0; transform-origin: 0 0; color: transparent; line-height: 1; pointer-events: all; user-select: text; z-index: 20; }
+      .react-pdf__Page__textContent span { position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+      .react-pdf__Page__annotations { position: absolute; top: 0; left: 0; transform-origin: 0 0; pointer-events: auto; z-index: 30; }
+      .react-pdf__Page__annotations .linkAnnotation > a { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: transparent !important; cursor: pointer; pointer-events: auto; }
+      
+      .rpg-border { box-shadow: -4px 0 0 0 #2c1810, 4px 0 0 0 #2c1810, 0 -4px 0 0 #2c1810, 0 4px 0 0 #2c1810; margin: 4px; background-color: #f5f2e9; }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@^19.2.3",
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.34.0",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react-markdown": "https://esm.sh/react-markdown@^10.1.0",
-    "react-pdf": "https://esm.sh/react-pdf@9.1.0?external=react,react-dom",
-    "pdfjs-dist": "https://esm.sh/pdfjs-dist@4.4.168",
-    "pdfjs-dist/": "https://esm.sh/pdfjs-dist@4.4.168/",
-    "katex": "https://esm.sh/katex@0.16.9"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
-</head>
+    
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@^19.2.3",
+        "react/": "https://esm.sh/react@^19.2.3/",
+        "@google/genai": "https://esm.sh/@google/genai@^1.34.0",
+        "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+        "react-markdown": "https://esm.sh/react-markdown@^10.1.0",
+        "react-pdf": "https://esm.sh/react-pdf@9.1.0?external=react,react-dom",
+        "pdfjs-dist": "https://esm.sh/pdfjs-dist@4.4.168",
+        "pdfjs-dist/": "https://esm.sh/pdfjs-dist@4.4.168/",
+        "katex": "https://esm.sh/katex@0.16.9"
+      }
+    }
+    </script>
+    <link rel="stylesheet" href="/index.css">
+  </head>
   <body class="bg-[#2c1810] text-[#2c1810] h-screen overflow-hidden">
+    
+    <div id="app-loader">
+      <div class="pixel-cat-loader">🐱</div>
+      <div class="loading-text">
+        DECODING SCROLLS<span class="loading-dots"></span>
+      </div>
+      <div class="rpg-progress-container">
+        <div class="rpg-progress-bar"></div>
+      </div>
+      <div class="loading-text" style="font-size: 10px; margin-top: 10px; opacity: 0.7;">
+        Scholar Cat is waking up...
+      </div>
+    </div>
+
     <div id="root" class="h-full"></div>
+    
+    <script>
+      window.onload = function() {
+        // 当页面资源加载完毕（React 还没完全渲染时），可以先保持 90%
+        // 如果想更精确，可以在 React App.tsx 的 useEffect 里删掉这个 div
+        
+        // 这里做一个简单的模拟，2秒后或者等待 React 挂载
+        // 更好的做法是在 React 入口文件里执行：document.getElementById('app-loader').style.opacity = '0';
+        
+        // 既然我们在 HTML 里，我们用一个监听器
+        const observer = new MutationObserver((mutations) => {
+          if (document.getElementById('root').childElementCount > 0) {
+             const loader = document.getElementById('app-loader');
+             if (loader) {
+                // 让进度条跑满
+                const bar = loader.querySelector('.rpg-progress-bar');
+                if(bar) bar.style.width = '100%';
+                
+                // 延迟一点点消失，让用户看到 100%
+                setTimeout(() => {
+                  loader.style.opacity = '0';
+                  setTimeout(() => {
+                    loader.remove();
+                  }, 500);
+                }, 500);
+                observer.disconnect();
+             }
+          }
+        });
+        
+        observer.observe(document.getElementById('root'), { childList: true, subtree: true });
+      };
+    </script>
+
     <script type="module" src="/index.tsx"></script>
   </body>
 </html>
