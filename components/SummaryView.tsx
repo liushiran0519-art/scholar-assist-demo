@@ -7,7 +7,7 @@ interface SummaryViewProps {
   summary: PaperSummary | null;
   isLoading: boolean;
   error: string | null;
-  onRetry?: () => void;
+  onRetry?: () => void; // 确保有这个 Prop
 }
 
 const SummaryView: React.FC<SummaryViewProps> = ({ summary, isLoading, error, onRetry }) => {
@@ -19,16 +19,23 @@ const SummaryView: React.FC<SummaryViewProps> = ({ summary, isLoading, error, on
     );
   }
 
-  if (error || (summary && summary.tags.includes("ERROR"))) { // 检查 tags 是否包含 ERROR
+  // 错误状态判断：有 error 字符串，或者 summary 对象里的 tags 包含 "ERROR"
+  const isErrorState = error || (summary && summary.tags.includes("ERROR"));
+
+  if (isErrorState) {
     return (
       <div className="p-6 bg-[#f4ecd8] h-full flex flex-col items-center justify-center space-y-4">
         <div className="bg-red-100 text-[#8B4513] border-4 border-[#8B4513] p-6 rounded text-center">
           <h3 className="font-bold pixel-font text-lg mb-2">鉴定失败 (APPRAISAL FAILED)</h3>
-          <p className="serif text-sm">{error || summary?.title}</p>
+          <p className="serif text-sm">{error || summary?.title || "未知错误"}</p>
+          {summary?.tldr?.painPoint && <p className="text-xs text-red-500 mt-2">{summary.tldr.painPoint}</p>}
         </div>
         {onRetry && (
-          <button onClick={onRetry} className="px-4 py-2 bg-[#2c1810] text-[#DAA520] border-2 border-[#8B4513] pixel-font text-xs hover:scale-105 transition-transform">
-             ↻ 重新鉴定 (RETRY)
+          <button 
+            onClick={onRetry} 
+            className="px-6 py-3 bg-[#2c1810] text-[#DAA520] border-2 border-[#8B4513] pixel-font text-xs hover:scale-105 transition-transform shadow-lg cursor-pointer"
+          >
+             ↻ 重新鉴定 (RETRY SPELL)
           </button>
         )}
       </div>
@@ -38,6 +45,7 @@ const SummaryView: React.FC<SummaryViewProps> = ({ summary, isLoading, error, on
   if (!summary) return null;
 
   return (
+    // ... 保持原来的正常渲染代码不变 ...
     <div className="h-full overflow-y-auto bg-[#f4ecd8] custom-scrollbar p-6 space-y-8 pb-20">
       
       {/* 1. Header & Attributes */}
