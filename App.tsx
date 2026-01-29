@@ -281,3 +281,5 @@ export const translateSelection = async (text: string): Promise<string> => {
         return "翻译失败";
     }
 };
+
+export default App;
