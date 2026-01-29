@@ -1,296 +1,181 @@
-import { PaperSummary, PageTranslation, ContentBlock, CitationInfo } from "../types";
+import { GoogleGenAI, Type } from "@google/genai";
+import { PaperSummary, PageTranslation, CitationInfo, ChatMessage } from "../types";
 
-// ================= 配置区域 =================
-const API_KEY = import.meta.env.VITE_PROXY_API_KEY;
-const BASE_URL = import.meta.env.VITE_PROXY_BASE_URL; 
-const MODEL_NAME = '[贩子死妈]gemini-3-flash-preview'; 
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// 检查配置 (仅在控制台提示，不弹窗)
-if (!API_KEY || !BASE_URL) {
-  console.error("❌ API 配置缺失！请在 .env 中设置 API Key 和 Base URL");
-}
+// Models
+const SUMMARY_MODEL = '[贩子死妈]gemini-3-flash-preview'; // Fast & Cheap for large text
+const TRANSLATION_MODEL = '[尝尝我的大香蕉]gemini-3-pro-image-preview'; // Multimodal for page screenshots
+const CHAT_MODEL = '[贩子死妈]gemini-3-flash-preview'; // Fast interactive chat
 
-// ================= 工具函数 =================
+export const generatePaperSummary = async (text: string): Promise<PaperSummary> => {
+  // Optimization: Truncate text to ~30k chars to reduce API cost/latency 
+  // while keeping Abstract, Intro, and usually Conclusion (depending on paper length)
+  const truncatedText = text.slice(0, 30000); 
 
-/**
- * 通用 Fetch 请求封装
- */
-async function callProxyApi(messages: any[], jsonMode = false) {
-  const headers = {
-    "Content-Type": "application/json",
-    "Authorization": `Bearer ${API_KEY}`
-  };
-
-  const body: any = {
-    model: MODEL_NAME,
-    messages: messages,
-    stream: false,
-    temperature: 0.7
-  };
-
-  if (jsonMode) {
-    body.response_format = { type: "json_object" };
-  }
-
-  try {
-    const response = await fetch('/api/proxy', {
-      method: "POST",
-      headers: headers,
-      body: JSON.stringify(body)
-    });
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      // 这里的 Error 只会在控制台看到，不会直接展示给用户
-      throw new Error(`Service Error ${response.status}: ${errData.error?.message || response.statusText}`);
-    }
-
-    const data = await response.json();
+  const response = await ai.models.generateContent({
+    model: SUMMARY_MODEL,
+    contents: `Analyze this academic paper text and generate a structured summary.
     
-    // 增加空值检查，防止 crash
-    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-        throw new Error("服务返回了空数据");
-    }
+    Text (First ~30k chars): ${truncatedText}
     
-    return data.choices[0].message.content;
-
-  } catch (error) {
-    console.error("Service Request Failed:", error);
-    throw error;
-  }
-}
-
-/**
- * 清洗 JSON 字符串
- */
-function cleanJson(text: string): string {
-  if (!text) return "{}";
-  // 移除 Markdown 标记，防止解析失败
-  return text.replace(/```json/g, '').replace(/```/g, '').trim();
-}
-
-// ================= 核心业务函数 =================
-
-/**
- * 1. 生成论文摘要
- */
-// ... (之前的 import 和 callProxyApi 保持不变)
-
-/**
- * 1. 生成论文摘要 (基于全文文本)
- */
-export const generatePaperSummary = async (fullPaperText: string): Promise<PaperSummary> => {
-  
-  // 1. 检查文本长度，如果完全没提取到，直接报错
-  if (!fullPaperText || fullPaperText.length < 100) {
-      throw new Error("PDF 内容提取为空，可能文件是纯图片扫描版？");
-  }
-
-  const prompt = `
-    Role: You are the pixel library guardian "Scholar Cat" (学术猫).
-    Task: Analyze the full content of this academic paper and generate a "Magic Item Appraisal Report".
-    
-    Input: The user has provided the parsed text of the PDF below.
-    
-    Output JSON ONLY with this structure:
-    {
-      "title": "Paper Title (Chinese)",
-      "tags": ["Tag1", "Tag2", "Tag3"],
-      "tldr": {
-        "painPoint": "The problem (metaphor, <30 words)",
-        "solution": "The method (metaphor, <30 words)",
-        "effect": "The result (stats, <30 words)"
-      },
-      "methodology": [
-        { "step": "Step Name", "desc": "Description" }
-      ],
-      "takeaways": ["Point 1", "Point 2", "Point 3"]
+    Return a JSON object in CHINESE (简体中文) with the following structure:
+    - title: Translated title
+    - tags: 3-5 keywords
+    - tldr: { painPoint (what problem), solution (what method), effect (result) }
+    - methodology: list of key steps
+    - takeaways: list of key insights`,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+            title: { type: Type.STRING },
+            tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+            tldr: {
+                type: Type.OBJECT,
+                properties: {
+                    painPoint: { type: Type.STRING },
+                    solution: { type: Type.STRING },
+                    effect: { type: Type.STRING }
+                }
+            },
+            methodology: { type: Type.ARRAY, items: { type: Type.STRING } },
+            takeaways: { type: Type.ARRAY, items: { type: Type.STRING } }
+        }
+      }
     }
+  });
 
-    --- BEGIN PAPER CONTENT ---
-    ${fullPaperText}
-    --- END PAPER CONTENT ---
-  `;
-
-  // 构造纯文本消息 (不再用 image_url)
-  const messages = [
-    {
-      role: "user",
-      content: prompt 
-    }
-  ];
-
-  try {
-    // 复用之前的反代调用函数
-    const text = await callProxyApi(messages, true);
-    return JSON.parse(cleanJson(text)) as PaperSummary;
-  } catch (error) {
-    console.error("Summary generation failed:", error);
-    // 返回兜底数据
-    return {
-      title: "解读中断",
-      tags: ["系统维护中"],
-      tldr: { 
-        painPoint: "文本量太大或提取失败", 
-        solution: "请尝试刷新重试", 
-        effect: "暂无数据" 
-      },
-      methodology: [],
-      takeaways: []
-    };
+  if (response.text) {
+    return JSON.parse(response.text) as PaperSummary;
   }
+  throw new Error("Summary generation failed");
 };
 
+export const translatePageContent = async (imageBase64: string): Promise<PageTranslation> => {
+  const response = await ai.models.generateContent({
+    model: TRANSLATION_MODEL,
+    contents: {
+      parts: [
+        { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } },
+        { text: `Analyze this page of an academic paper.
+        1. Identify main content blocks (paragraphs, headings).
+        2. Translate them into academic Chinese.
+        3. Identify 2-3 key technical terms for a glossary.
 
-/**
- * 2. 翻译页面
- */
-export const translatePageContent = async (base64Image: string): Promise<PageTranslation> => {
-  const prompt = `
-    Analyze this image of an academic paper page.
-    1. Extract content into 'blocks' (translate EN to CN).
-    2. Extract 'glossary' terms (3-5 terms).
-    
-    Output JSON ONLY:
-    {
-      "blocks": [
-        { "type": "paragraph|heading|list|equation|figure", "en": "original text", "cn": "translated text" }
-      ],
-      "glossary": [
-        { "term": "Term", "definition": "Chinese Definition" }
-      ]
-    }
-  `;
-
-  const messages = [
-    {
-      role: "user",
-      content: [
-        { type: "text", text: prompt },
-        {
-          type: "image_url",
-          image_url: { url: `data:image/jpeg;base64,${base64Image}` }
-        }
-      ]
-    }
-  ];
-
-  try {
-    const text = await callProxyApi(messages, true);
-    const data = JSON.parse(cleanJson(text));
-    return {
-      pageNumber: 0,
-      blocks: data.blocks || [],
-      glossary: data.glossary || []
-    };
-  } catch (error) {
-    // ✅ 修改：不再提“反代”或“识图失败”
-    return {
-      pageNumber: 0,
-      blocks: [{ type: "paragraph", en: "Network Error", cn: "暂时无法获取翻译内容，请检查网络连接。" }],
-      glossary: []
-    };
-  }
-};
-
-/**
- * 3. 聊天功能
- */
-export const chatWithPaper = async (
-  history: { role: 'user' | 'model', text: string }[],
-  currentMessage: string,
-  base64Data: string,
-  mimeType: string
-): Promise<string> => {
-  
-  const systemPrompt = `
-    你是“Scholar Cat (学术猫)”，一只住在像素图书馆的魔法猫。
-    任务：辅助主人阅读英文文献。
-    风格：活泼可爱，句尾带 [=^..^=]，解释要用大白话和类比。
-    规则：如果问公式，用 LaTeX 格式输出。
-  `;
-
-  const apiMessages = [
-    { role: "system", content: systemPrompt },
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "这是我正在阅读的文献，请基于此回答我的问题。" },
-        {
-          type: "image_url",
-          image_url: { url: `data:${mimeType};base64,${base64Data}` }
-        }
+        Return JSON format.` }
       ]
     },
-    ...history.map(h => ({
-      role: h.role === 'model' ? 'assistant' : 'user', 
-      content: h.text
-    })),
-    { role: "user", content: currentMessage }
-  ];
-
-  try {
-    return await callProxyApi(apiMessages);
-  } catch (error) {
-    // ✅ 修改：符合猫咪人设的错误提示
-    return "喵呜！魔法信号似乎中断了... 请稍后再试 [=T_T=]";
-  }
-};
-
-/**
- * 4. 划词翻译
- */
-export const translateSelection = async (text: string): Promise<string> => {
-  const messages = [
-    { role: "system", content: "You are a professional academic translator. Translate the following text to Chinese." },
-    { role: "user", content: text }
-  ];
-  try {
-    return await callProxyApi(messages);
-  } catch (error) {
-    return "翻译服务暂不可用";
-  }
-};
-
-/**
- * 5. 引用分析
- */
-export const analyzeCitation = async (citationId: string, base64Pdf: string, mimeType: string): Promise<CitationInfo> => {
-  const prompt = `
-    在文中找到引用 [${citationId}]。
-    返回 JSON: { "id": "${citationId}", "title": "...", "year": "...", "abstract": "...", "status": "NORMAL" }
-    找不到则 abstract 写 "未知"。
-  `;
-
-  const messages = [
-    {
-      role: "user",
-      content: [
-        { type: "text", text: prompt },
-        { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Pdf}` } }
-      ]
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          blocks: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                type: { type: Type.STRING, enum: ['paragraph', 'heading', 'list'] },
+                en: { type: Type.STRING },
+                cn: { type: Type.STRING }
+              }
+            }
+          },
+          glossary: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                term: { type: Type.STRING },
+                definition: { type: Type.STRING }
+              }
+            }
+          }
+        }
+      }
     }
-  ];
+  });
 
-  try {
-    const text = await callProxyApi(messages, true);
-    return JSON.parse(cleanJson(text)) as CitationInfo;
-  } catch (e) {
-    return { id: citationId, title: "获取失败", year: "?", abstract: "无法检索该文献信息", status: "NORMAL" };
+  if (response.text) {
+     const data = JSON.parse(response.text);
+     return {
+       pageNumber: 0, // Will be set by caller
+       blocks: data.blocks || [],
+       glossary: data.glossary || []
+     };
   }
+  throw new Error("Translation failed");
 };
 
-/**
- * 6. 公式解释
- */
-export const explainEquation = async (equation: string): Promise<string> => {
-  const messages = [
-    { role: "system", content: "解释以下数学公式，拆解符号含义，用通俗中文解释。" },
-    { role: "user", content: equation }
-  ];
-  try {
-    return await callProxyApi(messages);
-  } catch (error) {
-    return "暂时无法解析此公式";
-  }
+export const chatWithPaper = async (history: { role: 'user' | 'model'; text: string }[], newMessage: string, fileBase64: string, mimeType: string): Promise<string> => {
+  const chat = ai.chats.create({
+    model: CHAT_MODEL,
+    history: [
+       {
+         role: 'user',
+         parts: [
+           { inlineData: { mimeType: mimeType, data: fileBase64 } },
+           { text: "This is the paper we are discussing." }
+         ]
+       },
+       {
+         role: 'model',
+         parts: [{ text: "Understood. I have read the paper. Please ask me anything." }]
+       },
+       ...history.map(h => ({
+         role: h.role,
+         parts: [{ text: h.text }]
+       }))
+    ],
+    config: {
+      systemInstruction: "You are an expert academic assistant. Answer questions based on the provided paper. Keep answers concise and helpful. Use Chinese."
+    }
+  });
+
+  const result = await chat.sendMessage({ message: newMessage });
+  return result.text || "Thinking...";
+};
+
+export const analyzeCitation = async (citationId: string, fileBase64: string, mimeType: string): Promise<CitationInfo> => {
+    // Mock logic or simple extraction, real implementation would extract context
+    // Here we act as an Oracle hallucinating/predicting based on the context window
+    const response = await ai.models.generateContent({
+        model: CHAT_MODEL,
+        contents: {
+            parts: [
+                { inlineData: { mimeType: mimeType, data: fileBase64 } },
+                { text: `Find the citation/reference labelled "${citationId}" in this paper. 
+                Extract its Title, Year, and infer an Abstract or Context. 
+                Decide if it is "MUST_READ" (critical to methodology) or "SKIMMABLE".
+                Return JSON.` }
+            ]
+        },
+        config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                    id: { type: Type.STRING },
+                    title: { type: Type.STRING },
+                    year: { type: Type.STRING },
+                    abstract: { type: Type.STRING },
+                    status: { type: Type.STRING, enum: ["MUST_READ", "SKIMMABLE"] }
+                }
+            }
+        }
+    });
+    
+    if (response.text) return JSON.parse(response.text);
+    throw new Error("Citation analysis failed");
+};
+
+export const explainEquation = async (equationImageOrText: string): Promise<string> => {
+    // If it's text
+    const response = await ai.models.generateContent({
+        model: CHAT_MODEL,
+        contents: `Explain this equation/formula in simple terms for a grad student: ${equationImageOrText}`,
+    });
+    return response.text || "Could not explain.";
 };
