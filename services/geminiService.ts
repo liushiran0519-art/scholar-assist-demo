@@ -152,40 +152,36 @@ export const translatePageContent = async (pageText: string): Promise<PageTransl
   }
 
   const prompt = `
-    Analyze this page text of an academic paper.
-    1. Identify main content blocks.
-    2. Translate them into academic Chinese.
-    3. Identify key terms for glossary.
+    Task: Translate this academic paper page into Chinese.
+    
+    CRITICAL INSTRUCTION: 
+    Break down the text into logical semantic blocks (paragraphs, section headers). 
+    For each block, you MUST provide:
+    1. "en": The EXACT first 15-20 words of the original English text (used for search/highlighting).
+    2. "cn": The high-quality academic Chinese translation.
+    3. "type": "paragraph" or "heading".
 
     Input Text:
     """
-    ${pageText.slice(0, 5000)}
+    ${pageText.slice(0, 6000)}
     """
 
-    Return JSON format:
+    Return strict JSON:
     {
       "blocks": [
-        { "type": "paragraph|heading|list", "en": "original text", "cn": "translated text" }
+        { "type": "paragraph", "en": "start of the english sentence...", "cn": "中文翻译..." }
       ],
       "glossary": [
-        { "term": "Term", "definition": "Chinese Definition" }
+        { "term": "Term", "definition": "Definition" }
       ]
     }
   `;
 
   try {
     const responseText = await callProxyApi([{ role: "user", content: prompt }], true);
-    const data = cleanAndParseJson(responseText); // 使用增强版解析
+    // 这里假设你已经有了 cleanAndParseJson 函数，如果没有请保留原有的 JSON.parse 逻辑
+    const data = JSON.parse(responseText.replace(/```json/g, '').replace(/```/g, '')); 
     
-    // 检查是否是我们的兜底错误对象
-    if (data && data.raw_error) {
-       return {
-         pageNumber: 0,
-         blocks: data.blocks,
-         glossary: []
-       };
-    }
-
     return {
       pageNumber: 0,
       blocks: data.blocks || [],
@@ -195,7 +191,7 @@ export const translatePageContent = async (pageText: string): Promise<PageTransl
     console.error("Translation failed:", error);
     return {
       pageNumber: 0,
-      blocks: [{ type: "paragraph", en: "Error", cn: "翻译服务连接失败，请点击右上角重试。" }],
+      blocks: [{ type: "paragraph", en: "Error", cn: "翻译失败，请重试。" }],
       glossary: []
     };
   }
