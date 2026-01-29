@@ -13,14 +13,15 @@ export interface PaperSummary {
     solution: string;
     effect: string;
   };
-  methodology: string[];
+  methodology: { step: string; desc: string }[]; // 修正一下这里，确保和 Mock 数据一致
   takeaways: string[];
 }
 
 export interface ContentBlock {
-  type: 'paragraph' | 'heading' | 'list';
-  en: string;
-  cn: string;
+  // 新增 title, authors, reference, equation 等类型
+  type: 'paragraph' | 'heading' | 'list' | 'equation' | 'figure' | 'title' | 'authors' | 'reference' | 'abstract';
+  en: string; // 原文片段（用于定位）
+  cn: string; // 译文或解释
 }
 
 export interface PageTranslation {
