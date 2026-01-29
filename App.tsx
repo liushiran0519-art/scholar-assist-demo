@@ -278,34 +278,34 @@ const App: React.FC = () => {
     }
   };
 
-  // --- 【问题3修复】Summary Retry Logic ---
+  
   const retrySummary = async () => {
-    if (!file || !fileFingerprint) return;
-    
+    if (!file) return;
     setIsSummarizing(true);
-    setSummary(null); // 【关键】：置空以触发 Loading 状态，避免卡在 Error 界面
+    setSummary(null); // 清空以显示 Loading
     
     try {
-      let textToUse = fullText;
-      if (!textToUse || textToUse.length < 100) {
-         textToUse = await extractTextFromPdf(file.base64);
-         setFullText(textToUse);
-      }
-
-      const newSummary = await generatePaperSummary(textToUse);
-      
-      if (!newSummary.tags.includes("ERROR")) {
-          // 只有成功才存入 DB
-          await updateSummaryInHistory(fileFingerprint, newSummary);
+      // 重新提取全文（防止第一次提取为空）
+      // 注意：如果是大文件，这里可能还是会慢，但为了重试必须这样做
+      // 如果 storageService 已经存了 fullText，可以先读出来判断
+      let text = await extractTextFromPdf(file.base64);
+      if (!text || text.length < 100) {
+         throw new Error("Text extraction failed");
       }
       
+      const newSummary = await generatePaperSummary(text);
       setSummary(newSummary);
+      
+      // 更新历史记录（如果有指纹）
+      if (fileFingerprint) {
+         await updateSummaryInHistory(fileFingerprint, newSummary);
+      }
     } catch (e) {
       console.error(e);
       setSummary({
           title: "重试失败",
           tags: ["ERROR"],
-          tldr: { painPoint: "连接依然不稳定", solution: "请再次尝试", effect: "无" },
+          tldr: { painPoint: "依然无法解析", solution: "可能是文件已加密或为空", effect: "无" },
           methodology: [],
           takeaways: []
       });
@@ -313,7 +313,7 @@ const App: React.FC = () => {
       setIsSummarizing(false);
     }
   };
-
+  
   const handleCitationClick = async (id: string) => { 
     if (!fullText) return;
     setIsAnalyzingCitation(true);
@@ -552,9 +552,7 @@ const App: React.FC = () => {
                isLoading={isTranslatingPage}
                onHoverBlock={setHighlightText}
                onRetry={async () => {
-                   if (fileFingerprint) {
-                     await deletePageTranslation(fileFingerprint, debouncedPage);
-                   }
+                   // 1. 核心：从 Map 中删除当前页，否则 processCanvas 会以为已经缓存了
                    setPageTranslations(prev => {
                        const newMap = new Map(prev);
                        newMap.delete(debouncedPage);
@@ -568,14 +566,15 @@ const App: React.FC = () => {
           )}
 
           {activeTab === SidebarTab.SUMMARY && (
-              <div className="p-0 h-full overflow-y-auto bg-[#f4ecd8]">
-                <SummaryView 
+             <div className="p-0 h-full overflow-y-auto bg-[#e8e4d9]">
+               {/* 确保传递 retrySummary 函数 */}
+               <SummaryView 
                   summary={summary} 
                   isLoading={isSummarizing} 
                   error={null} 
                   onRetry={retrySummary} 
-                />
-              </div>
+               />
+             </div>
           )}
           
           {activeTab === SidebarTab.CHAT && (
