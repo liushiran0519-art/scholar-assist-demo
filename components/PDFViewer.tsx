@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, forwardRef } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { ChevronLeftIcon, ChevronRightIcon, ZoomInIcon, ZoomOutIcon, LoaderIcon, InfoIcon, StarIcon } from './IconComponents';
 
-// 配置 Worker (保持你的 CDN 设置)
+// 配置 Worker
 pdfjs.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs`;
 
 interface PDFViewerProps {
@@ -48,10 +48,9 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
     setScale(prevScale => Math.min(Math.max(0.6, prevScale + delta), 2.5));
   };
 
-  // --- 截图逻辑 (用于 AI 识别) ---
+  // --- 截图逻辑 (保持不变) ---
   const captureCanvas = () => {
     if (!pageContainerRef.current) return;
-    // 查找当前页的 DOM 节点
     const pageDiv = pageContainerRef.current.querySelector(`.react-pdf__Page[data-page-number="${pageNumber}"]`);
     if (!pageDiv) return;
     const canvas = pageDiv.querySelector('canvas');
@@ -60,7 +59,6 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
     }
   };
 
-  // 监听外部截图触发信号
   useEffect(() => {
     if ((triggerCapture || 0) > 0) {
       const timer = setTimeout(() => {
@@ -70,28 +68,23 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
     }
   }, [triggerCapture, pageNumber]);
 
-  // 翻页或缩放时重置状态
   useEffect(() => {
     setTextLayerReady(false);
     setHighlights([]);
   }, [pageNumber, scale]);
 
 
-  // --- 核心高亮逻辑 (修复版) ---
-  // 原理：遍历 PDF 文本层的 DOM 节点，找到匹配的文字，计算其坐标
+  // --- 核心高亮逻辑 (保持不变) ---
   useEffect(() => {
-    // 1. 基础检查
     if (!highlightText || highlightText.length < 2 || !textLayerReady || !pageContainerRef.current) {
       setHighlights([]);
       return;
     }
 
     const calculateHighlights = () => {
-      // 找到 react-pdf 生成的文本层
       const textLayer = pageContainerRef.current?.querySelector('.react-pdf__Page__textContent');
       if (!textLayer) return;
 
-      // 2. 提取所有文本节点
       const textNodes: Text[] = [];
       const walker = document.createTreeWalker(textLayer, NodeFilter.SHOW_TEXT);
       let node;
@@ -101,11 +94,8 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
       
       if (textNodes.length === 0) return;
 
-      // 3. 建立映射：将分散的 DOM 节点映射到一个连续的字符串中
       let normalizedPdfText = "";
       const charMap: { node: Text; index: number }[] = [];
-      
-      // 过滤掉不可见字符，提高匹配率
       const isSignificant = (char: string) => /[a-zA-Z0-9\u4e00-\u9fa5]/.test(char);
 
       for (const txtNode of textNodes) {
@@ -119,13 +109,11 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         }
       }
       
-      // 4. 在连续字符串中查找目标文字
       const normalizedQuery = highlightText.split('').filter(isSignificant).join('').toLowerCase();
       if (normalizedQuery.length < 2) return; 
 
       let startIndex = normalizedPdfText.indexOf(normalizedQuery);
       
-      // 简单的模糊匹配重试 (如果完全匹配失败，尝试匹配头尾)
       if (startIndex === -1 && normalizedQuery.length > 20) {
          const head = normalizedQuery.substring(0, 10);
          startIndex = normalizedPdfText.indexOf(head);
@@ -138,7 +126,6 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
 
       const endIndex = startIndex + normalizedQuery.length - 1;
       
-      // 5. 根据映射找回 DOM 节点，计算坐标
       if (!charMap[startIndex] || !charMap[endIndex]) return;
       
       const startNodeData = charMap[startIndex];
@@ -160,7 +147,6 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
           const r = rects[i];
           if (r.width < 1 || r.height < 1) continue;
           
-          // 计算相对于 PDF 页面的坐标
           newHighlights.push({
             left: r.left - pageRect.left,
             top: r.top - pageRect.top,
@@ -170,7 +156,6 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         }
         setHighlights(newHighlights);
 
-        // 自动滚动到高亮位置
         if (newHighlights.length > 0) {
            startNodeData.node.parentElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
@@ -181,7 +166,6 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
       }
     };
 
-    // 防抖执行
     const timer = setTimeout(calculateHighlights, 100);
     return () => clearTimeout(timer);
 
@@ -200,7 +184,6 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
       if (text.length > 0 && pageContainerRef.current.contains(selection.anchorNode)) {
          const range = selection.getRangeAt(0);
          const rect = range.getBoundingClientRect();
-         // 考虑滚动偏移
          setSelectionMenu({
            x: rect.left + (rect.width / 2),
            y: rect.top - 10,
@@ -218,30 +201,43 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
   return (
     <div className="flex flex-col h-full bg-[#5c4033] relative">
       
-      {/* ⚠️ 强制样式修复：确保文本层覆盖在 Canvas 上且透明 */}
+      {/* ⚠️ 核心样式修复 ⚠️ */}
       <style>{`
+        /* 1. 强制 PDF 页面为相对定位容器 */
         .react-pdf__Page {
           position: relative;
+          display: block;
         }
+
+        /* 2. 将文本层强制覆盖在图片上，并且完全透明 */
         .react-pdf__Page__textContent {
           position: absolute !important;
           top: 0 !important;
           left: 0 !important;
-          transform-origin: 0 0;
-          color: transparent !important; /* 文字透明 */
-          opacity: 0.5; /* 保持可选 */
-          pointer-events: all;
+          width: 100% !important;
+          height: 100% !important;
+          transform: none !important; /* 防止偏移 */
+          color: transparent !important; /* 文字颜色透明 */
+          background: transparent !important;
+          opacity: 1 !important; /* 保持为 1，确保 DOM 存在可供计算 */
+          pointer-events: all; /* 允许选中（如果你想禁止手动选中，改 none） */
           line-height: 1;
+          user-select: text;
+          z-index: 10;
         }
+
+        /* 3. 隐藏浏览器默认的蓝色选区背景，避免看到“蓝色方块” */
         .react-pdf__Page__textContent ::selection {
-          background: rgba(218, 165, 32, 0.4); /* 金色选区 */
+          background: transparent; 
+          color: transparent;
         }
-        /* 移除 textLayer 默认可能导致的换行间距 */
+
+        /* 4. 确保内部 span 也是透明且保持位置 */
         .react-pdf__Page__textContent span {
-            color: transparent;
+            color: transparent !important;
             position: absolute;
             white-space: pre;
-            cursor: text;
+            cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" style="fill:black;stroke:white;stroke-width:1px;"><text y="20" font-size="20">🐾</text></svg>'), text !important;
             transform-origin: 0% 0%;
         }
       `}</style>
@@ -301,19 +297,19 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
                 scale={scale}
                 renderTextLayer={true} 
                 renderAnnotationLayer={false} 
-                className="bg-white shadow-lg"
+                className="bg-white shadow-lg relative" // 确保 relative
                 onRenderSuccess={() => {
                   setTimeout(captureCanvas, 300);
                 }}
                 onGetTextSuccess={() => setTextLayerReady(true)}
               />
               
-              {/* Highlight Overlay Layer (z-20: on top of text layer) */}
+              {/* Highlight Overlay Layer (z-index: 20 确保在文字层之上) */}
               <div className="absolute inset-0 pointer-events-none z-20">
                 {highlights.map((h, i) => (
                   <div
                     key={i}
-                    className="absolute bg-yellow-400 mix-blend-multiply opacity-50 transition-all duration-300 border-b-2 border-yellow-600"
+                    className="absolute bg-yellow-400 mix-blend-multiply opacity-50 transition-all duration-300 border-b-2 border-yellow-600 shadow-[0_0_5px_rgba(255,215,0,0.5)]"
                     style={{
                       left: h.left,
                       top: h.top,
