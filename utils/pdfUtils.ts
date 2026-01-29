@@ -1,6 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist';
 
-// 配置 Worker (保持不变)
+// 配置 Worker
 if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs`;
 }
@@ -18,7 +18,24 @@ export const fileToBase64 = (file: File): Promise<string> => {
   });
 };
 
-// 获取整个 PDF 文本（用于摘要）
+// [新增] 将 Base64 转回 Blob URL (修复刷新后 PDF 丢失的问题)
+export const base64ToBlobUrl = (base64: string, mimeType: string): string => {
+  try {
+    const byteCharacters = atob(base64);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: mimeType });
+    return URL.createObjectURL(blob);
+  } catch (e) {
+    console.error("Base64 to Blob conversion failed", e);
+    return "";
+  }
+};
+
+// 获取整个 PDF 文本
 export const extractTextFromPdf = async (base64Data: string): Promise<string> => {
   try {
     const binaryString = window.atob(base64Data);
@@ -32,7 +49,6 @@ export const extractTextFromPdf = async (base64Data: string): Promise<string> =>
     const pdf = await loadingTask.promise;
     
     let fullText = '';
-    // 限制前 15 页用于摘要，避免 Token 爆炸
     const maxPages = Math.min(pdf.numPages, 15); 
 
     for (let i = 1; i <= maxPages; i++) {
@@ -51,7 +67,7 @@ export const extractTextFromPdf = async (base64Data: string): Promise<string> =>
   }
 };
 
-// [新增] 获取指定单页的文本（用于页面翻译）
+// 获取指定单页的文本
 export const extractPageText = async (base64Data: string, pageNumber: number): Promise<string> => {
   try {
     const binaryString = window.atob(base64Data);
@@ -69,7 +85,6 @@ export const extractPageText = async (base64Data: string, pageNumber: number): P
     const page = await pdf.getPage(pageNumber);
     const textContent = await page.getTextContent();
     
-    // 简单的文本拼接，后续可以做更复杂的布局分析优化
     return textContent.items.map((item: any) => item.str).join(' ');
   } catch (error) {
     console.error(`Page ${pageNumber} Text Extraction Error:`, error);
