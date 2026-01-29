@@ -149,26 +149,52 @@ const App: React.FC = () => {
 
 
   const handleFileUpload = async (file: File) => {
-  // 1. 转 Base64 (用于显示 PDF)
-  const base64 = await fileToBase64(file); 
+  // A. 界面初始化：先让 PDF 显示出来，不用等 AI
+  const base64 = await fileToBase64(file);
   setPdfData(base64);
+  
+  // 生成文件指纹 (ID)
+  const fingerprint = getFileFingerprint(file);
 
   try {
     setIsLoading(true);
 
-    // 2. ✨ 关键步骤：先提取纯文本
-    console.log("正在提取 PDF 文本...");
+    // B. 本地解析 (CPU 运算，免费)
+    // ⚠️ 必须做：无论是否命中缓存，我们都需要这份文本给“聊天模式”当上下文
+    console.log("正在提取 PDF 全文文本...");
     const textContent = await extractTextFromPdf(base64);
     
-    // 3. 把提取出来的几万字纯文本发给 AI
-    console.log("正在召唤学术猫...");
-    const summary = await generatePaperSummary(textContent);
-    
-    setSummary(summary);
+    // 把全文存入状态，给 Chat 功能用 (这一步很重要！)
+    // 假设你有一个 setFullText 的 state，如果没有，请创建一个
+    setFullText(textContent); 
+
+    // C. 💰 省钱时刻：检查缓存
+    const cachedSummary = getCachedSummary(fingerprint);
+
+    if (cachedSummary) {
+      console.log(`[Cache] 🎯 命中缓存！指纹: ${fingerprint}`);
+      console.log("💰 这是一个回头客，直接加载旧记忆，省了一笔 API 费！");
+      
+      setSummary(cachedSummary);
+      // 任务结束，Loading 消失，无需联网
+    } else {
+      // D. 缓存未命中：只能花钱了
+      console.log("[Cache] 💨 是新论文，准备召唤学术猫 (API)...");
+      
+      // 调用 Gemini (这是唯一花 API 额度的地方)
+      const newSummary = await generatePaperSummary(textContent);
+      
+      // 存入缓存，造福下一次
+      saveSummaryToCache(fingerprint, newSummary);
+      
+      setSummary(newSummary);
+    }
 
   } catch (error) {
     console.error("处理失败:", error);
-    alert("学术猫没能看懂这篇论文 (可能是扫描版PDF？)");
+    // 错误处理：如果是解析失败，可能是扫描版
+    // 如果是 API 失败，已经在 Service 层拦截过了，这里只做兜底
+    alert("喵呜！读取论文失败了，请检查网络或文件格式。");
   } finally {
     setIsLoading(false);
   }
