@@ -3,6 +3,10 @@ import { PageTranslation, ContentBlock, GlossaryTerm, AppearanceSettings } from 
 import GamifiedLoader from './GamifiedLoader';
 import ReactMarkdown from 'react-markdown';
 import katex from 'katex';
+import 'katex/dist/katex.min.css'; // 确保引入样式
+
+// 图标组件 (如果没有单独文件，可以使用之前的 IconComponents)
+import { InfoIcon, StarIcon } from './IconComponents'; 
 
 interface TranslationViewerProps {
   translation: PageTranslation | undefined;
@@ -14,6 +18,7 @@ interface TranslationViewerProps {
   appearance: AppearanceSettings;
 }
 
+// --- 懒加载容器：只渲染视口内的区块，优化长文档性能 ---
 const LazyBlock = ({ children, heightHint = 100 }: { children: React.ReactNode, heightHint?: number }) => {
   const [isVisible, setIsVisible] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -26,7 +31,7 @@ const LazyBlock = ({ children, heightHint = 100 }: { children: React.ReactNode, 
           observer.disconnect(); 
         }
       },
-      { rootMargin: '300px' } 
+      { rootMargin: '200px' } // 提前 200px 渲染
     );
     if (containerRef.current) observer.observe(containerRef.current);
     return () => observer.disconnect();
@@ -34,7 +39,7 @@ const LazyBlock = ({ children, heightHint = 100 }: { children: React.ReactNode, 
 
   return (
     <div ref={containerRef} style={{ minHeight: isVisible ? 'auto' : heightHint }}>
-      {isVisible ? children : <div className="animate-pulse bg-gray-200/20 rounded" style={{height: heightHint}} />}
+      {isVisible ? children : <div className="animate-pulse bg-gray-400/10 rounded w-full" style={{height: heightHint}} />}
     </div>
   );
 };
@@ -49,184 +54,206 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
   appearance
 }, ref) => {
 
-  const containerStyle = appearance.theme === 'sepia' 
-    ? { backgroundColor: '#F4ECD8', color: '#433422' }
-    : { backgroundColor: '#2c1810', color: '#e8e4d9' }; 
+  // --- 1. 样式配置 (根据主题动态变化) ---
+  const isSepia = appearance.theme === 'sepia';
+  
+  const styles = {
+    container: isSepia 
+      ? { backgroundColor: '#F4ECD8', color: '#433422' }
+      : { backgroundColor: '#2c1810', color: '#e8e4d9' },
+    
+    highlight: isSepia 
+      ? 'bg-[#DAA520]/20 border-[#8B4513] text-[#8B4513]' 
+      : 'bg-[#DAA520]/10 border-[#DAA520] text-[#DAA520]',
+    
+    tooltip: {
+      bg: isSepia ? 'bg-[#fffef0]' : 'bg-[#1a0f0a]',
+      border: isSepia ? 'border-[#8B4513]' : 'border-[#DAA520]',
+      text: isSepia ? 'text-[#433422]' : 'text-[#e8e4d9]',
+    },
 
-  const textStyle = {
-    fontSize: `${appearance.fontSize}px`,
-    fontFamily: appearance.fontFamily === 'serif' ? '"Noto Serif SC", serif' : 'system-ui, sans-serif'
+    accentColor: isSepia ? '#8B4513' : '#DAA520',
+    borderColor: isSepia ? '#8B4513' : '#DAA520',
+    
+    font: {
+      fontSize: `${appearance.fontSize}px`,
+      fontFamily: appearance.fontFamily === 'serif' ? '"Noto Serif SC", serif' : 'system-ui, sans-serif',
+      lineHeight: '1.8'
+    }
   };
 
-  const highlightClass = appearance.theme === 'sepia' 
-    ? 'bg-[#DAA520]/20 border-[#8B4513]' 
-    : 'bg-[#DAA520]/10 border-[#DAA520]';
-
-  const tooltipBg = appearance.theme === 'sepia' ? 'bg-[#fffef0]' : 'bg-[#2c1810]';
-  const tooltipText = appearance.theme === 'sepia' ? 'text-[#433422]' : 'text-[#e8e4d9]';
-
-  // 复制 LaTeX 功能
+  // --- 2. 辅助功能：复制公式 ---
   const copyLatex = (e: React.MouseEvent, latex: string) => {
     e.stopPropagation();
     navigator.clipboard.writeText(latex);
-    // 简单的视觉反馈
     const btn = e.currentTarget as HTMLButtonElement;
     const originalText = btn.innerText;
     btn.innerText = "已复制 (COPIED!)";
-    setTimeout(() => { btn.innerText = originalText; }, 1500);
+    btn.style.opacity = "1";
+    setTimeout(() => { 
+        btn.innerText = originalText; 
+        btn.style.opacity = "";
+    }, 1500);
   };
 
-  if (isLoading) {
-    return (
-      <div className="h-full" style={containerStyle}>
-        <GamifiedLoader />
-      </div>
-    );
-  }
-
-  if (!translation || translation.blocks.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full p-6 text-center" style={containerStyle}>
-        <div className="mb-4 opacity-50">
-           <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-        </div>
-        <p className="mb-4 pixel-font text-xs">卷轴内容空白</p>
-        <button 
-          onClick={onRetry}
-          className="px-4 py-2 rpg-btn text-xs font-bold bg-[#8B4513] text-[#DAA520] border-2 border-[#2c1810]"
-        >
-          重新施法 (Retry)
-        </button>
-      </div>
-    );
-  }
-
+  // --- 3. 辅助功能：富文本渲染 (处理引用 [1] 和 术语高亮) ---
   const renderRichText = (text: string, glossary: GlossaryTerm[]) => {
-    if (text.length > 5000) return <span>{text.slice(0, 500)}... (Text too long, truncated)</span>;
+    if (!text) return null;
+    
+    // 分割引用标记 [1], [1-3], [1, 2]
+    // Regex 解释: 匹配 [数字...] 格式
     const parts = text.split(/(\[\d+(?:-\d+)?(?:,\s*\d+)*\])/g);
     
     return parts.map((part, idx) => {
+      // 如果是引用标记
       if (/^\[\d+(?:-\d+)?(?:,\s*\d+)*\]$/.test(part)) {
-        const id = part.replace(/[\[\]]/g, '');
+        const id = part.replace(/[\[\]]/g, '').split(',')[0].split('-')[0]; // 提取第一个数字作为ID
         return (
-          <span 
+          <sup 
             key={idx} 
             onClick={(e) => { e.stopPropagation(); onCitationClick(id); }}
-            className={`font-bold cursor-pointer border-b border-dotted mx-0.5 px-0.5 rounded transition-colors ${appearance.theme === 'sepia' ? 'text-[#8B4513] border-[#8B4513] hover:bg-[#8B4513]/10' : 'text-[#DAA520] border-[#DAA520] hover:bg-[#DAA520]/20'}`}
-            title="点击查看文献详情"
+            className={`cursor-pointer font-bold mx-0.5 px-1 rounded transition-colors hover:scale-110 inline-block`}
+            style={{ color: styles.accentColor, border: `1px dashed ${styles.borderColor}` }}
+            title="点击查看文献详情 (Click to view citation)"
           >
             {part}
-          </span>
+          </sup>
         );
       }
 
+      // 如果是普通文本，进行术语 (Glossary) 匹配
       let segments: React.ReactNode[] = [part];
-      glossary.forEach(g => {
-        const term = g.term;
-        const newSegments: React.ReactNode[] = [];
-        segments.forEach(seg => {
-          if (typeof seg === 'string') {
-            const splitRegex = new RegExp(`(${term})`, 'gi');
-            const subParts = seg.split(splitRegex);
-            subParts.forEach((sp, spIdx) => {
-               if (sp.toLowerCase() === term.toLowerCase()) {
-                 newSegments.push(
-                   <span key={`${idx}-${g.term}-${spIdx}`} className="relative group/glossary inline-block cursor-help mx-0.5">
-                     <span className={`font-bold border-b-2 px-1 rounded transition-all flex items-center gap-1 ${highlightClass} ${appearance.theme === 'sepia' ? 'text-[#8B4513]' : 'text-[#DAA520]'}`}>
-                        {sp}
-                        <span className="text-[10px] opacity-70">✨</span>
+      
+      if (glossary && glossary.length > 0) {
+        glossary.forEach(g => {
+          const term = g.term;
+          const newSegments: React.ReactNode[] = [];
+          segments.forEach(seg => {
+            if (typeof seg === 'string') {
+              // 忽略大小写匹配
+              const splitRegex = new RegExp(`(${term})`, 'gi');
+              const subParts = seg.split(splitRegex);
+              subParts.forEach((sp, spIdx) => {
+                 if (sp.toLowerCase() === term.toLowerCase()) {
+                   newSegments.push(
+                     <span key={`${idx}-${g.term}-${spIdx}`} className="relative group/glossary inline-block cursor-help mx-0.5 border-b-2 border-dotted" style={{borderColor: styles.accentColor}}>
+                       <span className="font-bold">{sp}</span>
+                       
+                       {/* Tooltip */}
+                       <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 hidden group-hover/glossary:block z-50 pointer-events-none animate-in fade-in zoom-in-95 duration-200">
+                         <div className={`${styles.tooltip.bg} ${styles.tooltip.text} p-3 rounded shadow-xl border-2 ${styles.tooltip.border} relative`}>
+                            <div className="flex items-center gap-2 mb-1 pb-1 border-b border-gray-500/20">
+                               <span className="text-lg">🐱</span>
+                               <span className="pixel-font text-[10px] font-bold uppercase tracking-wider opacity-70">Scholar Note</span>
+                            </div>
+                            <p className="text-xs serif leading-relaxed">{g.definition}</p>
+                            {/* 底部小三角 */}
+                            <div className={`absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-[${isSepia ? '#8B4513' : '#DAA520'}]`}></div>
+                         </div>
+                       </span>
                      </span>
-                     <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-56 hidden group-hover/glossary:block z-50 pointer-events-none tooltip-anim">
-                       <div className={`${tooltipBg} ${tooltipText} p-3 rounded-lg border-2 border-[#DAA520] shadow-xl relative`}>
-                          <p className="pixel-font text-[10px] text-[#DAA520] mb-1 uppercase tracking-wider">Scholar Cat Note:</p>
-                          <p className="text-xs serif leading-relaxed">{g.definition}</p>
-                          <div className={`absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-[${appearance.theme === 'sepia' ? '#fffef0' : '#2c1810'}]`}></div>
-                       </div>
-                     </span>
-                   </span>
-                 );
-               } else { newSegments.push(sp); }
-            });
-          } else { newSegments.push(seg); }
+                   );
+                 } else { 
+                   newSegments.push(sp); 
+                 }
+              });
+            } else { 
+              newSegments.push(seg); 
+            }
+          });
+          segments = newSegments;
         });
-        segments = newSegments;
-      });
+      }
       return <span key={idx}>{segments}</span>;
     });
   };
 
-  return (
-    <div 
-      className="h-full overflow-y-auto p-8 space-y-6 relative custom-scrollbar scroll-smooth" 
-      style={containerStyle}
-      ref={ref}
-    >
-      <div className="absolute inset-0 pointer-events-none opacity-10 z-0" style={{backgroundImage: 'url("https://www.transparenttextures.com/patterns/paper.png")'}}></div>
+  // --- 4. 核心渲染器：根据 block.type 渲染不同组件 ---
+  const renderBlockContent = (block: ContentBlock, idx: number) => {
+    switch (block.type) {
+      case 'title':
+        return (
+          <div className="mb-8 text-center px-4">
+             <div className="inline-block px-3 py-1 mb-2 border rounded-full text-[10px] pixel-font uppercase opacity-60" style={{borderColor: styles.accentColor, color: styles.accentColor}}>
+                Paper Title
+             </div>
+             <h1 className="text-2xl md:text-3xl font-bold leading-tight border-b-4 border-double pb-6" style={{ borderColor: styles.borderColor, ...styles.font }}>
+               {block.cn}
+             </h1>
+          </div>
+        );
       
-      <div className={`mb-6 pb-2 border-b-2 flex justify-between items-center relative z-10 ${appearance.theme === 'sepia' ? 'border-[#8B4513]' : 'border-[#DAA520]'}`}>
-        <h3 className={`text-xs font-bold pixel-font uppercase ${appearance.theme === 'sepia' ? 'text-[#8B4513]' : 'text-[#DAA520]'}`}>
-          第 {translation.pageNumber} 章 (Chapter {translation.pageNumber})
-        </h3>
-        <button 
-          onClick={onRetry} 
-          className={`text-[10px] font-bold pixel-font flex items-center gap-1 hover:opacity-70`}
-        >
-          <span>↻</span> 重铸法术 (REFRESH)
-        </button>
-      </div>
-      
-      {translation.blocks.map((block, idx) => (
-        <LazyBlock key={idx} heightHint={block.type === 'figure' ? 200 : 80}>
-          <div 
-            className={`group relative p-3 transition-colors cursor-pointer z-10 rounded hover:bg-black/5`}
-            onMouseEnter={() => onHoverBlock(block.en)}
-            onMouseLeave={() => onHoverBlock(null)}
-          >
-            {/* 左侧装饰条 */}
-            <div className={`absolute left-0 top-3 bottom-3 w-1 opacity-0 group-hover:opacity-100 transition-opacity rounded-full ${appearance.theme === 'sepia' ? 'bg-[#8B4513]' : 'bg-[#DAA520]'}`} />
-            
-            {block.type === 'heading' && (
-              <h3 className="text-lg font-bold mb-2 mt-2 leading-tight" style={textStyle}>
+      case 'authors':
+        return (
+          <div className="mb-8 text-center px-8">
+             <div className="p-4 rounded bg-black/5 italic" style={{ ...styles.font, fontSize: '14px' }}>
                 {block.cn}
-              </h3>
-            )}
+             </div>
+             <p className="text-[10px] opacity-50 mt-1 uppercase tracking-widest pixel-font">Author Affiliations</p>
+          </div>
+        );
 
-            {block.type === 'paragraph' && (
-              <p className="leading-relaxed text-justify" style={textStyle}>
-                {renderRichText(block.cn, translation.glossary)}
-              </p>
-            )}
-
-            {block.type === 'list' && (
-              <div className={`p-3 rpg-border ${appearance.theme === 'sepia' ? 'bg-[#fffef0]' : 'bg-[#1a0f0a]'}`}>
-                <div className="prose prose-sm max-w-none" style={{...textStyle, color: 'inherit'}}>
-                  <ReactMarkdown>{block.cn}</ReactMarkdown>
-                </div>
+      case 'abstract':
+        return (
+           <div className={`mb-8 p-6 rounded-lg border-l-4 shadow-sm relative overflow-hidden`} 
+                style={{ 
+                  backgroundColor: isSepia ? '#fffef0' : '#1a0f0a',
+                  borderLeftColor: styles.accentColor 
+                }}>
+              <div className="absolute top-0 right-0 p-2 opacity-10">
+                 <InfoIcon className="w-16 h-16" />
               </div>
-            )}
+              <span className="font-bold text-xs uppercase tracking-wider block mb-3 pixel-font" style={{color: styles.accentColor}}>Abstract (摘要)</span>
+              <p className="text-sm italic leading-relaxed text-justify" style={styles.font}>{block.cn}</p>
+           </div>
+        );
 
-            {/* ✅ 【问题4修复】公式单独展示 + 复制按钮 */}
-            {/* 假设 AI 返回的 type 为 'equation' 或翻译文本中包含公式 */}
-            {block.type === 'equation' && (
-              <div className={`my-4 p-4 border-2 text-center relative group/eq rounded shadow-inner ${appearance.theme === 'sepia' ? 'bg-[#fffef0] border-[#8B4513] text-[#2c1810]' : 'bg-[#1a0f0a] border-[#DAA520] text-[#DAA520]'}`}>
+      case 'heading':
+        return (
+          <div className="mt-8 mb-4 flex items-center gap-2">
+            <span className="w-2 h-6 rounded-sm" style={{backgroundColor: styles.accentColor}}></span>
+            <h3 className="text-lg font-bold leading-tight" style={{ ...styles.font, color: styles.accentColor }}>
+              {block.cn}
+            </h3>
+          </div>
+        );
+
+      case 'reference':
+        return (
+          <div className="pl-8 -indent-8 text-xs opacity-80 mb-2 leading-relaxed font-serif hover:opacity-100 transition-opacity">
+            <span className="inline-block w-6 font-bold text-right mr-2" style={{color: styles.accentColor}}>[Ref]</span> 
+            {renderRichText(block.cn, [])}
+          </div>
+        );
+
+      case 'equation':
+         return (
+            <div className={`my-6 mx-2 p-1 rounded-lg border-2 shadow-inner group/eq transition-all hover:scale-[1.01]`}
+                 style={{ 
+                   backgroundColor: isSepia ? '#fffef0' : '#1a0f0a',
+                   borderColor: styles.borderColor 
+                 }}>
                 
-                {/* 顶部标签 */}
-                <div className="flex justify-between items-center mb-2 border-b border-dashed border-opacity-30 pb-1" style={{borderColor: 'currentColor'}}>
-                    <span className="text-[10px] opacity-50 pixel-font">SPELL FORMULA</span>
-                    {/* 复制按钮 */}
+                {/* Header Bar */}
+                <div className="flex justify-between items-center px-3 py-1 border-b border-dashed border-opacity-30" style={{borderColor: styles.borderColor}}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">⚡</span>
+                      <span className="text-[10px] opacity-50 pixel-font uppercase">Formula Spell</span>
+                    </div>
                     <button 
-                       onClick={(e) => copyLatex(e, block.en)} // block.en 通常存储原始 Latex
-                       className={`text-[9px] font-bold px-2 py-1 border rounded hover:opacity-80 transition-opacity ${appearance.theme === 'sepia' ? 'bg-[#8B4513] text-[#e8e4d9]' : 'bg-[#DAA520] text-[#2c1810]'}`}
+                       onClick={(e) => copyLatex(e, block.en)} 
+                       className={`text-[9px] font-bold px-2 py-1 border rounded hover:opacity-80 transition-opacity uppercase pixel-font`}
+                       style={{ borderColor: styles.borderColor, color: styles.accentColor }}
                     >
-                       复制咒语 (COPY LATEX)
+                       Copy Latex
                     </button>
                 </div>
 
-                {/* 渲染公式 */}
+                {/* Math Display */}
                 <div 
-                  className="overflow-x-auto overflow-y-hidden py-2 cursor-help"
+                  className="overflow-x-auto overflow-y-hidden py-4 px-2 text-center cursor-help"
                   onClick={(e) => { e.stopPropagation(); onEquationClick(block.en); }}
-                  title="点击解析公式含义"
+                  title="点击让学术猫解释公式 (Click to explain)"
                   dangerouslySetInnerHTML={{ 
                     __html: katex.renderToString(block.en, { 
                       throwOnError: false, 
@@ -236,23 +263,150 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
                   }} 
                 />
 
-                {/* 公式解释/中文翻译 */}
-                <p className="mt-2 text-xs text-left border-t pt-1 italic opacity-80" style={{borderColor: 'currentColor'}}>
-                  {block.cn !== '公式' ? block.cn : '此处为数学咒语'}
-                </p>
-              </div>
-            )}
+                {/* Explanation */}
+                <div className="px-3 py-2 text-xs text-left border-t border-dashed opacity-80 italic bg-black/5" style={{borderColor: styles.borderColor, ...styles.font, fontSize: '13px'}}>
+                   <span className="font-bold not-italic mr-2" style={{color: styles.accentColor}}>解:</span>
+                   {block.cn}
+                </div>
+            </div>
+         );
 
-            {block.type === 'figure' && (
-              <div className={`my-4 border-2 border-dashed p-4 text-center rounded ${appearance.theme === 'sepia' ? 'border-[#8B4513] bg-[#fffef0]' : 'border-[#DAA520] bg-[#1a0f0a]'}`}>
-                <p className={`text-[10px] font-bold pixel-font uppercase mb-2 ${appearance.theme === 'sepia' ? 'text-[#8B4513]' : 'text-[#DAA520]'}`}>Illustration</p>
-                <p className="text-sm italic" style={textStyle}>{block.cn}</p>
-              </div>
-            )}
-          </div>
-        </LazyBlock>
-      ))}
-      <div className="h-20" />
+      case 'figure':
+        return (
+           <div className="my-6 mx-4 border-2 border-dashed p-6 text-center rounded opacity-90 relative"
+                style={{ borderColor: styles.borderColor, backgroundColor: isSepia ? 'rgba(0,0,0,0.02)' : 'rgba(255,255,255,0.02)' }}>
+             <p className="text-[10px] font-bold pixel-font uppercase mb-2" style={{color: styles.accentColor}}>Figure / Table Area</p>
+             <p className="text-sm italic font-serif">{block.cn}</p>
+           </div>
+        );
+        
+      case 'list':
+        return (
+            <div className="pl-4 my-2">
+                <ReactMarkdown 
+                    components={{
+                        li: ({node, ...props}) => (
+                            <li className="list-disc marker:text-[#8B4513] pl-1 mb-1" style={{ color: styles.accentColor, ...styles.font }}>
+                                <span style={{ color: styles.container.color }}>{props.children}</span>
+                            </li>
+                        )
+                    }}
+                >
+                    {block.cn}
+                </ReactMarkdown>
+            </div>
+        )
+
+      case 'paragraph':
+      default:
+        return (
+           <p className="mb-4 text-justify indent-8" style={styles.font}>
+              {renderRichText(block.cn, translation?.glossary || [])}
+           </p>
+        );
+    }
+  };
+
+
+  // --- 5. 加载状态 ---
+  if (isLoading) {
+    return (
+      <div className="h-full flex items-center justify-center" style={styles.container}>
+        <GamifiedLoader />
+      </div>
+    );
+  }
+
+  // --- 6. 空状态 / 错误状态 (支持重试) ---
+  if (!translation || translation.blocks.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-6 text-center space-y-6" style={styles.container}>
+        <div className="opacity-50">
+           <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        </div>
+        <div>
+            <h3 className="text-lg font-bold pixel-font mb-2">卷轴内容空白 (BLANK SCROLL)</h3>
+            <p className="text-xs serif opacity-70 max-w-xs mx-auto">
+              此页面可能是空白页，或者是纯图片导致提取失败。如果确认有内容，请尝试重新施法。
+            </p>
+        </div>
+        
+        {/* 修复：重试按钮 */}
+        <button 
+          onClick={onRetry}
+          className={`px-6 py-2 rounded font-bold pixel-font flex items-center gap-2 transition-transform active:scale-95 shadow-lg border-2`}
+          style={{ 
+             backgroundColor: styles.accentColor, 
+             color: isSepia ? '#e8e4d9' : '#2c1810',
+             borderColor: styles.container.color
+          }}
+        >
+          <span>↻</span> 重新施法 (RECAST SPELL)
+        </button>
+      </div>
+    );
+  }
+
+  // --- 7. 主渲染内容 ---
+  return (
+    <div 
+      className="h-full overflow-y-auto p-4 md:p-8 relative custom-scrollbar scroll-smooth" 
+      style={styles.container}
+      ref={ref}
+    >
+      {/* 纹理背景 */}
+      <div 
+        className="absolute inset-0 pointer-events-none opacity-5 z-0 mix-blend-multiply" 
+        style={{backgroundImage: 'url("https://www.transparenttextures.com/patterns/paper.png")'}}
+      ></div>
+      
+      {/* 顶部页码导航 */}
+      <div className={`sticky top-0 z-20 mb-6 pb-2 border-b-2 flex justify-between items-center backdrop-blur-sm`} 
+           style={{ borderColor: styles.borderColor, backgroundColor: isSepia ? 'rgba(244, 236, 216, 0.8)' : 'rgba(44, 24, 16, 0.8)' }}>
+        
+        <div className="flex items-center gap-2">
+            <span className="text-xl">📜</span>
+            <h3 className="text-xs font-bold pixel-font uppercase" style={{ color: styles.accentColor }}>
+            Chapter {translation.pageNumber}
+            </h3>
+        </div>
+
+        <button 
+          onClick={onRetry} 
+          title="重新翻译本页"
+          className="text-[10px] font-bold pixel-font flex items-center gap-1 hover:opacity-70 px-2 py-1 rounded border border-transparent hover:border-current transition-all"
+          style={{ color: styles.accentColor }}
+        >
+          <span>↻</span> REFRESH
+        </button>
+      </div>
+      
+      {/* 内容区块列表 */}
+      <div className="relative z-10 space-y-2 max-w-3xl mx-auto pb-20">
+        {translation.blocks.map((block, idx) => (
+            <LazyBlock key={idx} heightHint={block.type === 'paragraph' ? 100 : 200}>
+            <div 
+                className={`group relative p-1 md:p-2 transition-colors duration-300 rounded-lg hover:bg-black/5`}
+                // 鼠标移入时触发左侧 PDF 的高亮
+                onMouseEnter={() => block.en && block.en.length > 5 && onHoverBlock(block.en)}
+                onMouseLeave={() => onHoverBlock(null)}
+            >
+                {/* 悬停时的左侧指示条 */}
+                <div 
+                    className="absolute left-[-10px] top-2 bottom-2 w-1 opacity-0 group-hover:opacity-100 transition-all duration-300 rounded-full scale-y-0 group-hover:scale-y-100 origin-center" 
+                    style={{ backgroundColor: styles.accentColor }} 
+                />
+                
+                {renderBlockContent(block, idx)}
+            </div>
+            </LazyBlock>
+        ))}
+
+        {/* 页脚装饰 */}
+        <div className="text-center opacity-30 mt-10">
+            <span className="text-xl">❦</span>
+        </div>
+      </div>
     </div>
   );
 });
