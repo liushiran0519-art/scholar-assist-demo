@@ -1,74 +1,44 @@
+@@ -1,43 +1,43 @@
 // api/proxy.js
-export const config = {
-  runtime: 'edge',
-};
+// 这是一个 Vercel 云函数，专门用来做“高级中转”
 
-export default async function handler(req) {
-  // 1. 打印请求方法
-  console.log(`[Proxy] Received ${req.method} request`);
+export default async function handler(req, res) {
+  // 1. 处理 CORS (允许你的网页访问这个函数)
+  res.setHeader('Access-Control-Allow-Credentials', true);
+  res.setHeader('Access-Control-Allow-Origin', '*'); // 允许任何域名，或者写你的 vercel 域名
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
 
+  // 如果是预检请求 (OPTIONS)，直接返回 OK
   if (req.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      },
-    });
+    res.status(200).end();
+    return;
   }
+
+  // 2. 准备转发的目标地址
+  // 你的服务商地址 (这里写死，确保不出错)
+  const TARGET_URL = "https://ag.beijixingxing.com/v1/chat/completions";
 
   try {
-    const body = await req.json();
-    
-    // 2. 确定上游地址
-    let baseUrl = process.env.VITE_PROXY_BASE_URL;
-    if (!baseUrl) {
-      throw new Error("❌ VITE_PROXY_BASE_URL 环境变量未设置！");
-    }
-    // 去除末尾斜杠
-    if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
-    
-    // 拼接完整 URL
-    const targetUrl = `${baseUrl}/chat/completions`;
-
-    // 3. 打印关键调试信息 (在 Vercel 后台 Logs 或本地终端可见)
-    console.log(`[Proxy] 🎯 Target URL: ${targetUrl}`);
-    console.log(`[Proxy] 🤖 Model: ${body.model}`);
-
-    const response = await fetch(targetUrl, {
+    // 3. 发起伪装请求
+    const response = await fetch(TARGET_URL, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': req.headers.get('Authorization'), // 透传 Key
+        "Content-Type": "application/json",
+        // 转发客户端传来的 Key
+        "Authorization": req.headers.authorization,
+        // 关键：伪装 User-Agent，防止被对方防火墙拦截 Vercel
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(req.body)
     });
 
-    // 4. 如果上游报错，打印出来
+    // 4. 处理返回结果
+    const data = await response.json();
+
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[Proxy] ❌ Upstream Error ${response.status}:`, errorText);
-      return new Response(errorText, {
-        status: response.status,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      console.error("Upstream Error:", data);
+      return res.status(response.status).json(data);
     }
 
-    const data = await response.json();
-    return new Response(JSON.stringify(data), {
-      status: 200,
-      headers: { 
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*' 
-      },
-    });
-
-  } catch (error) {
-    console.error("[Proxy] 🔥 Internal Error:", error);
-    return new Response(JSON.stringify({ error: { message: error.message } }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
-  }
-}
+    // 转发成功的数据
