@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { PaperFile, PaperSummary, SidebarTab, ChatMessage, AppMode, PageTranslation, CitationInfo, AppearanceSettings, Note } from './types';
 // ✅ 引入 base64ToBlobUrl
 import { extractTextFromPdf, extractPageText, fileToBase64, base64ToBlobUrl } from './utils/pdfUtils';
-import { generateFingerprint, getSummary, saveSummary, getPageTranslation, savePageTranslation, saveActiveSession, getActiveSession, clearActiveSession } from './utils/storage';
+import { generateFingerprint, getSummary, saveSummary, getPageTranslation, savePageTranslation, saveActiveSession, getActiveSession, clearActiveSession, deletePageTranslation, deleteSummary  } from './utils/storage';
 import { generatePaperSummary, chatWithPaper, translatePageContent, analyzeCitation, explainEquation } from './services/geminiService';
 import { chatWithDeepSeek } from './services/deepseekService';
 import SummaryView from './components/SummaryView';
@@ -152,15 +152,39 @@ const App: React.FC = () => {
       try {
         const cachedTrans = await getPageTranslation(fileFingerprint, pageNum);
         
-        if (cachedTrans) {
+        // 🔍 检查缓存是否有效 (防止缓存了报错信息)
+        // 如果缓存里只有一行且是 Error，就当作没缓存
+        const isInvalidCache = cachedTrans && 
+          cachedTrans.blocks.length === 1 && 
+          (cachedTrans.blocks[0].en === "Error" || cachedTrans.blocks[0].cn.includes("AI 格式错误"));
+
+        if (cachedTrans && !isInvalidCache) {
           console.log(`[Cache] 📖 Page ${pageNum} Hit (DB)`);
           setPageTranslations(prev => new Map(prev).set(pageNum, cachedTrans));
         } else {
+          if (isInvalidCache) {
+             console.log(`[Cache] 🗑️ 删除无效的缓存 Page ${pageNum}`);
+             await deletePageTranslation(fileFingerprint, pageNum);
+          }
+
           console.log(`[API] ⚡ Extracting text & Translating Page ${pageNum}...`);
           const pageText = await extractPageText(file.base64, pageNum);
+          
           const newTrans = await translatePageContent(pageText);
           newTrans.pageNumber = pageNum;
-          await savePageTranslation(fileFingerprint, pageNum, newTrans);
+
+          // 🚨 关键修改：只有成功的结果才存入 DB
+          // 判断标准：blocks 数量 > 1 或者 第一块不是 Error
+          const isSuccess = newTrans.blocks.length > 0 && 
+                            newTrans.blocks[0].en !== "Error" && 
+                            !newTrans.blocks[0].cn.includes("AI 格式错误");
+
+          if (isSuccess) {
+            await savePageTranslation(fileFingerprint, pageNum, newTrans);
+          } else {
+            console.warn("翻译结果异常，不写入缓存，仅在内存显示");
+          }
+          
           setPageTranslations(prev => new Map(prev).set(pageNum, newTrans));
         }
       } catch (error) {
@@ -169,6 +193,7 @@ const App: React.FC = () => {
         setIsTranslatingPage(false);
       }
     };
+
     loadTranslation();
   }, [debouncedPage, fileFingerprint, mode, file]); 
 
@@ -411,17 +436,22 @@ const App: React.FC = () => {
         <div className="h-full relative" style={{ width: `${100 - leftWidth}%`, backgroundColor: appearance.theme === 'sepia' ? '#F4ECD8' : '#2c1810' }}>
           
           {activeTab === 'DUAL' && (
-             <TranslationViewer 
+               <TranslationViewer 
                translation={pageTranslations.get(debouncedPage)}
                isLoading={isTranslatingPage}
                onHoverBlock={setHighlightText}
-               onRetry={() => {
+               onRetry={async () => {
+                   // 1. 先从 DB 删除脏数据
+                   if (fileFingerprint) {
+                     await deletePageTranslation(fileFingerprint, debouncedPage);
+                   }
+                   // 2. 再清空 React State，触发 useEffect 重新请求
                    setPageTranslations(prev => {
                        const newMap = new Map(prev);
                        newMap.delete(debouncedPage);
                        return newMap;
                    });
-               }}
+               }}            
                onCitationClick={handleCitationClick}
                onEquationClick={handleEquationClick}
                appearance={appearance}
