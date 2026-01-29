@@ -188,7 +188,7 @@ const App: React.FC = () => {
           const textContent = await extractTextFromPdf(base64Data);
           setFullText(textContent);
           
-          // B. Generate Summary (API)
+          // B. Generate Summary (API) - using optimized service
           const newSummary = await generatePaperSummary(textContent);
           
           // C. Save to Cache
