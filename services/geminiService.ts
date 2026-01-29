@@ -163,7 +163,7 @@ export const translatePageContent = async (pageText: string): Promise<PageTransl
 
     Input Text:
     """
-    ${pageText.slice(0, 6000)}
+    ${pageText.slice(0, 10000)}
     """
 
     Return strict JSON:
