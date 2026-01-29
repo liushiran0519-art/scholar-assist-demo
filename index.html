@@ -8,51 +8,86 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Serif+SC:wght@400;700&family=Press+Start+2P&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
     <style>
+      :root {
+        --bg-color: #1a100c; /* 更深的咖啡色 */
+        --accent-color: #e6c276; /* 羊皮纸金 */
+        --magic-glow: #ffd700;
+      }
+
       body {
         font-family: 'Inter', system-ui, -apple-system, sans-serif;
-        background-color: #2c1810; /* Dark background behind the scroll */
+        background-color: var(--bg-color);
         margin: 0;
         overflow: hidden;
       }
       .serif { font-family: 'Noto Serif SC', serif; }
       .pixel-font { font-family: 'Press Start 2P', cursive; }
       
-      /* --- 核心：RPG 加载页样式 --- */
+      /* --- 核心：RPG 加载页美化版 --- */
       #app-loader {
         position: fixed;
         top: 0; left: 0; width: 100%; height: 100%;
-        background-color: #2c1810;
+        /* 背景升级：径向渐变，制造“聚光灯”效果 */
+        background: radial-gradient(circle at center, #2c1810 0%, #0f0805 100%);
         z-index: 9999;
         display: flex;
         flex-direction: column;
         justify-content: center;
         align-items: center;
-        transition: opacity 0.5s ease-out;
+        transition: opacity 0.6s ease-in-out;
       }
 
-      /* 像素猫跳动 */
-      .pixel-cat-loader {
-        font-size: 60px;
+      /* 学者猫容器 */
+      .scholar-cat-container {
+        width: 120px;
+        height: 120px;
         margin-bottom: 20px;
-        animation: cat-bounce 0.8s infinite alternate steps(2);
+        position: relative;
+        animation: float-magical 3s ease-in-out infinite;
       }
 
-      @keyframes cat-bounce {
-        0% { transform: translateY(0); }
-        100% { transform: translateY(-10px); }
+      /* 悬浮动画 */
+      @keyframes float-magical {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-15px); }
       }
 
-      /* 复古文字 */
+      /* 猫的 SVG 样式 */
+      .cat-svg {
+        width: 100%;
+        height: 100%;
+        drop-shadow: 0 10px 15px rgba(0,0,0,0.5);
+      }
+      .cat-eye {
+        animation: blink 4s infinite;
+        transform-origin: center;
+      }
+      @keyframes blink {
+        0%, 48%, 52%, 100% { transform: scaleY(1); }
+        50% { transform: scaleY(0.1); }
+      }
+
+      /* 书本发光 */
+      .magic-book-glow {
+        animation: glow-pulse 2s infinite alternate;
+      }
+      @keyframes glow-pulse {
+        from { opacity: 0.3; }
+        to { opacity: 0.8; }
+      }
+
+      /* 复古文字优化 */
       .loading-text {
         font-family: 'Press Start 2P', cursive;
-        color: #DAA520; /* Gold */
-        font-size: 14px;
-        margin-bottom: 24px;
-        text-shadow: 2px 2px #000;
-        letter-spacing: 2px;
+        color: var(--accent-color);
+        font-size: 12px; /* 稍微调小一点，更精致 */
+        margin-bottom: 20px;
+        text-shadow: 0 0 10px rgba(230, 194, 118, 0.3);
+        letter-spacing: 3px;
+        text-transform: uppercase;
+        opacity: 0.9;
       }
       
-      /* 动态省略号 */
       .loading-dots::after {
         content: '.';
         animation: dots 1.5s steps(5, end) infinite;
@@ -64,56 +99,53 @@
         80%, 100% { content: ''; }
       }
 
-      /* RPG 进度条容器 */
+      /* RPG 进度条容器美化 */
       .rpg-progress-container {
-        width: 300px;
-        height: 24px;
-        background-color: #4a3c31;
+        width: 280px;
+        height: 16px; /* 更细一点，更优雅 */
+        background-color: #1a0f0a;
         position: relative;
-        /* 像素边框效果 */
-        box-shadow: 
-          -4px 0 0 0 #000,
-          4px 0 0 0 #000,
-          0 -4px 0 0 #000,
-          0 4px 0 0 #000;
-        padding: 4px;
+        border: 2px solid #5d4037;
+        padding: 3px;
+        box-shadow: 0 0 15px rgba(0,0,0,0.5);
+        border-radius: 4px;
       }
 
-      /* 进度条填充 - 带条纹动画 */
+      /* 进度条填充 - 魔法流动效果 */
       .rpg-progress-bar {
         height: 100%;
         width: 0%;
-        background-color: #DAA520;
-        background-image: linear-gradient(
-          45deg,
-          rgba(255, 255, 255, .2) 25%,
-          transparent 25%,
-          transparent 50%,
-          rgba(255, 255, 255, .2) 50%,
-          rgba(255, 255, 255, .2) 75%,
-          transparent 75%,
-          transparent
-        );
-        background-size: 20px 20px;
+        background: linear-gradient(90deg, #b8860b, #ffd700, #b8860b);
+        background-size: 200% 100%;
+        border-radius: 2px;
+        position: relative;
+        box-shadow: 0 0 10px rgba(255, 215, 0, 0.4);
         animation: 
           fill-up 2s ease-out forwards,
-          stripes 1s linear infinite;
-        position: relative;
+          shimmer 2s linear infinite;
       }
 
-      /* 假进度动画：先快后慢，最后停在 90% 等 React 加载 */
+      @keyframes shimmer {
+        0% { background-position: 100% 0; }
+        100% { background-position: -100% 0; }
+      }
+
       @keyframes fill-up {
         0% { width: 0%; }
         50% { width: 70%; }
         100% { width: 90%; }
       }
 
-      @keyframes stripes {
-        from { background-position: 0 0; }
-        to { background-position: 40px 0; }
+      /* 底部状态文字 */
+      .status-text {
+        font-family: 'Inter', sans-serif;
+        font-size: 11px; 
+        margin-top: 12px; 
+        color: #8d7b68;
+        font-style: italic;
       }
 
-      /* --- 之前你已有的样式保留 --- */
+      /* --- 原有滚动条等样式保持不变 --- */
       ::-webkit-scrollbar { width: 12px; height: 12px; }
       ::-webkit-scrollbar-track { background: #e8e4d9; border-left: 2px solid #2c1810; }
       ::-webkit-scrollbar-thumb { background: #8B4513; border: 2px solid #e8e4d9; }
@@ -145,18 +177,57 @@
     </script>
     <link rel="stylesheet" href="/index.css">
   </head>
-  <body class="bg-[#2c1810] text-[#2c1810] h-screen overflow-hidden">
+  <body class="bg-[#1a100c] text-[#2c1810] h-screen overflow-hidden">
     
+    <!-- 新的 Loading 界面 -->
     <div id="app-loader">
-      <div class="pixel-cat-loader">🐱</div>
-      <div class="loading-text">
-        DECODING SCROLLS<span class="loading-dots"></span>
+      <!-- 矢量学者猫 SVG (内嵌代码，无需额外加载) -->
+      <div class="scholar-cat-container">
+        <svg class="cat-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+          <!-- 阴影 -->
+          <ellipse cx="50" cy="95" rx="30" ry="5" fill="#000" opacity="0.3" />
+          
+          <!-- 书本底座 -->
+          <path d="M20,85 Q20,90 25,90 L75,90 Q80,90 80,85 L80,75 Q80,80 75,80 L25,80 Q20,80 20,75 Z" fill="#5d4037" />
+          <path d="M22,78 L78,78 L78,88 L22,88 Z" fill="#f5f5dc" /> <!-- 书页 -->
+          <path d="M20,75 Q50,85 80,75 L80,85 Q50,95 20,85 Z" fill="#8d6e63" /> <!-- 封面 -->
+
+          <!-- 猫身体 -->
+          <path d="M35,75 Q30,40 50,30 Q70,40 65,75 Z" fill="#333" /> 
+          <!-- 猫耳朵 -->
+          <path d="M38,35 L30,20 L48,32 Z" fill="#333" />
+          <path d="M62,35 L70,20 L52,32 Z" fill="#333" />
+          
+          <!-- 眼镜 (学者特征) -->
+          <g stroke="#ffd700" stroke-width="1" fill="none" opacity="0.9">
+             <circle cx="43" cy="45" r="4" />
+             <path d="M47,45 L53,45" />
+             <circle cx="57" cy="45" r="4" />
+          </g>
+
+          <!-- 眼睛 (带眨眼动画) -->
+          <g class="cat-eye">
+            <circle cx="43" cy="45" r="1.5" fill="#fff" />
+            <circle cx="57" cy="45" r="1.5" fill="#fff" />
+          </g>
+
+          <!-- 魔法光尘 -->
+          <circle cx="50" cy="25" r="2" fill="#ffd700" class="magic-book-glow" />
+          <circle cx="20" cy="40" r="1" fill="#ffd700" class="magic-book-glow" style="animation-delay: 0.5s"/>
+          <circle cx="80" cy="50" r="1.5" fill="#ffd700" class="magic-book-glow" style="animation-delay: 1s"/>
+        </svg>
       </div>
+
+      <div class="loading-text">
+        Deciphering Scrolls<span class="loading-dots"></span>
+      </div>
+      
       <div class="rpg-progress-container">
         <div class="rpg-progress-bar"></div>
       </div>
-      <div class="loading-text" style="font-size: 10px; margin-top: 10px; opacity: 0.7;">
-        Scholar Cat is waking up...
+      
+      <div class="status-text">
+        Summoning Scholar Cat...
       </div>
     </div>
 
@@ -164,28 +235,23 @@
     
     <script>
       window.onload = function() {
-        // 当页面资源加载完毕（React 还没完全渲染时），可以先保持 90%
-        // 如果想更精确，可以在 React App.tsx 的 useEffect 里删掉这个 div
-        
-        // 这里做一个简单的模拟，2秒后或者等待 React 挂载
-        // 更好的做法是在 React 入口文件里执行：document.getElementById('app-loader').style.opacity = '0';
-        
-        // 既然我们在 HTML 里，我们用一个监听器
         const observer = new MutationObserver((mutations) => {
           if (document.getElementById('root').childElementCount > 0) {
              const loader = document.getElementById('app-loader');
              if (loader) {
-                // 让进度条跑满
+                // 跑满进度条
                 const bar = loader.querySelector('.rpg-progress-bar');
+                const text = loader.querySelector('.status-text');
                 if(bar) bar.style.width = '100%';
+                if(text) text.innerText = "Ready to Read";
                 
-                // 延迟一点点消失，让用户看到 100%
+                // 优雅退出
                 setTimeout(() => {
                   loader.style.opacity = '0';
                   setTimeout(() => {
                     loader.remove();
-                  }, 500);
-                }, 500);
+                  }, 600);
+                }, 600);
                 observer.disconnect();
              }
           }
