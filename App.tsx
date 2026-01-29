@@ -1,15 +1,15 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { PaperFile, PaperSummary, SidebarTab, ChatMessage, AppMode, PageTranslation, CitationInfo, AppearanceSettings, Note } from './types';
-import { extractTextFromPdf, extractPageText, fileToBase64 } from './utils/pdfUtils';
+// ✅ 引入 base64ToBlobUrl
+import { extractTextFromPdf, extractPageText, fileToBase64, base64ToBlobUrl } from './utils/pdfUtils';
 import { generateFingerprint, getSummary, saveSummary, getPageTranslation, savePageTranslation, saveActiveSession, getActiveSession, clearActiveSession } from './utils/storage';
-// ✅ 从 Service 导入 API 函数，而不是在 App.tsx 里重写
 import { generatePaperSummary, chatWithPaper, translatePageContent, analyzeCitation, explainEquation } from './services/geminiService';
 import { chatWithDeepSeek } from './services/deepseekService';
 import SummaryView from './components/SummaryView';
 import ChatInterface from './components/ChatInterface';
 import TranslationViewer from './components/TranslationViewer';
 import PDFViewer from './components/PDFViewer';
-import { ScholarCatMascot, CatMood } from './components/ScholarCatMascot'; // 引入新版小猫
+import { ScholarCatMascot, CatMood } from './components/ScholarCatMascot';
 import { UploadIcon, BookOpenIcon, XIcon, SettingsIcon, GripVerticalIcon, StarIcon } from './components/IconComponents';
 
 const App: React.FC = () => {
@@ -86,7 +86,21 @@ const App: React.FC = () => {
         const session = await getActiveSession();
         if (session && session.file) {
           console.log("[Session] Found previous session:", session.file.name);
-          setFile(session.file);
+          
+          // 🚨 关键修复：从 base64 重新生成 Blob URL
+          // 之前的 session.file.url 是旧的 blob: 链接，已经失效了
+          let validUrl = session.file.url;
+          if (session.file.base64) {
+             validUrl = base64ToBlobUrl(session.file.base64, session.file.mimeType);
+          }
+
+          // 构建新的文件对象
+          const restoredFile: PaperFile = {
+            ...session.file,
+            url: validUrl // 替换为新生成的有效 URL
+          };
+
+          setFile(restoredFile);
           setFileFingerprint(session.fingerprint);
           setCurrentPage(session.currentPage || 1);
           setDebouncedPage(session.currentPage || 1);
@@ -100,6 +114,8 @@ const App: React.FC = () => {
         }
       } catch (e) {
         console.error("Session restore failed", e);
+        // 如果恢复失败，清空会话防止死循环
+        await clearActiveSession();
       }
     };
     restoreSession();
@@ -141,17 +157,10 @@ const App: React.FC = () => {
           setPageTranslations(prev => new Map(prev).set(pageNum, cachedTrans));
         } else {
           console.log(`[API] ⚡ Extracting text & Translating Page ${pageNum}...`);
-          // 1. 本地提取文本 (无图模式)
           const pageText = await extractPageText(file.base64, pageNum);
-          
-          // 2. 调用 API (geminiService)
           const newTrans = await translatePageContent(pageText);
           newTrans.pageNumber = pageNum;
-
-          // 3. 存缓存
           await savePageTranslation(fileFingerprint, pageNum, newTrans);
-          
-          // 4. 更新状态
           setPageTranslations(prev => new Map(prev).set(pageNum, newTrans));
         }
       } catch (error) {
@@ -160,11 +169,9 @@ const App: React.FC = () => {
         setIsTranslatingPage(false);
       }
     };
-
     loadTranslation();
   }, [debouncedPage, fileFingerprint, mode, file]); 
 
-  // --- File Upload ---
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files[0]) {
       const selectedFile = event.target.files[0];
@@ -185,7 +192,6 @@ const App: React.FC = () => {
       setCurrentPage(1);
       setDebouncedPage(1);
       
-      // Summary Check
       try {
         setIsSummarizing(true);
         const cachedData = await getSummary(fingerprint);
@@ -216,13 +222,11 @@ const App: React.FC = () => {
     }
   };
 
-  // --- Handlers ---
   const handleCitationClick = async (id: string) => { 
     if (!fullText) return;
     setIsAnalyzingCitation(true);
     setCitationInfo(null);
     try {
-      // 传递完整文本上下文给 AI 分析
       const info = await analyzeCitation(id, fullText);
       setCitationInfo(info);
     } catch(e) {
@@ -318,8 +322,6 @@ const App: React.FC = () => {
     return () => { window.removeEventListener('mousemove', resize); window.removeEventListener('mouseup', stopResizing); };
   }, [resize, stopResizing]);
 
-  // --- Render ---
-
   if (mode === AppMode.UPLOAD) {
     return (
        <div className="min-h-screen bg-[#2c1810] flex flex-col items-center justify-center p-4 relative overflow-hidden">
@@ -349,8 +351,6 @@ const App: React.FC = () => {
 
   return (
     <div className={`flex flex-col h-screen overflow-hidden font-sans ${appearance.theme === 'sepia' ? 'bg-[#F4ECD8]' : 'bg-[#2c1810]'}`}>
-      
-      {/* Header */}
       <div className={`h-16 border-b-4 flex items-center px-4 justify-between shrink-0 shadow-lg z-50 ${appearance.theme === 'sepia' ? 'bg-[#e8e4d9] border-[#8B4513]' : 'bg-[#2c1810] border-[#8B4513]'}`}>
          <div className="flex items-center gap-3">
            <div className="bg-[#DAA520] p-1 border-2 border-[#e8e4d9]">
@@ -361,7 +361,6 @@ const App: React.FC = () => {
            <span className="text-xs font-bold text-[#DAA520] truncate max-w-[200px] pixel-font">{file?.name}</span>
          </div>
          <div className="flex gap-2 items-center">
-            {/* Tabs */}
             {['DUAL', SidebarTab.SUMMARY, SidebarTab.CHAT, SidebarTab.NOTES].map((tab) => (
              <button 
                key={tab}
@@ -387,10 +386,7 @@ const App: React.FC = () => {
          </div>
       </div>
 
-      {/* Main Content */}
       <div className="flex-1 flex overflow-hidden relative">
-        
-        {/* LEFT: PDF Viewer */}
         <div className="h-full relative bg-[#5c4033]" style={{ width: `${leftWidth}%` }}>
           {file && (
              <PDFViewer 
@@ -405,7 +401,6 @@ const App: React.FC = () => {
           )}
         </div>
 
-        {/* Resizer */}
         <div 
            className="w-2 bg-[#2c1810] border-l border-r border-[#8B4513] cursor-col-resize hover:bg-[#DAA520] z-40 flex items-center justify-center"
            onMouseDown={startResizing}
@@ -413,7 +408,6 @@ const App: React.FC = () => {
           <GripVerticalIcon className="w-4 h-4 text-[#8B4513]" />
         </div>
 
-        {/* RIGHT: AI Panels */}
         <div className="h-full relative" style={{ width: `${100 - leftWidth}%`, backgroundColor: appearance.theme === 'sepia' ? '#F4ECD8' : '#2c1810' }}>
           
           {activeTab === 'DUAL' && (
@@ -456,14 +450,12 @@ const App: React.FC = () => {
           )}
         </div>
         
-        {/* Toast */}
         {toastMessage && (
           <div className="absolute bottom-8 right-8 z-50 animate-bounce bg-[#2c1810] text-[#DAA520] p-3 rounded-lg border-2 border-[#DAA520]">
              {toastMessage}
           </div>
         )}
 
-        {/* Citation/Equation Modals omitted for brevity, logic exists in handlers */}
         {(isAnalyzingCitation || citationInfo) && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
             <div className="bg-[#e8e4d9] border-4 border-[#2c1810] p-4 max-w-md w-full shadow-2xl relative">
@@ -489,7 +481,6 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {/* Cat Mascot (Z-index high) */}
         <ScholarCatMascot 
            mood={catMood} 
            message={catMessage} 
