@@ -7,9 +7,10 @@ interface SummaryViewProps {
   summary: PaperSummary | null;
   isLoading: boolean;
   error: string | null;
+  onRetry?: () => void;
 }
 
-const SummaryView: React.FC<SummaryViewProps> = ({ summary, isLoading, error }) => {
+const SummaryView: React.FC<SummaryViewProps> = ({ summary, isLoading, error, onRetry }) => {
   if (isLoading) {
     return (
       <div className="h-full bg-[#f4ecd8] border-l-4 border-[#8B4513] relative overflow-hidden">
@@ -18,13 +19,18 @@ const SummaryView: React.FC<SummaryViewProps> = ({ summary, isLoading, error }) 
     );
   }
 
-  if (error) {
+  if (error || (summary && summary.tags.includes("ERROR"))) { // 检查 tags 是否包含 ERROR
     return (
-      <div className="p-6 bg-[#f4ecd8] h-full flex items-center justify-center">
+      <div className="p-6 bg-[#f4ecd8] h-full flex flex-col items-center justify-center space-y-4">
         <div className="bg-red-100 text-[#8B4513] border-4 border-[#8B4513] p-6 rounded text-center">
           <h3 className="font-bold pixel-font text-lg mb-2">鉴定失败 (APPRAISAL FAILED)</h3>
-          <p className="serif">{error}</p>
+          <p className="serif text-sm">{error || summary?.title}</p>
         </div>
+        {onRetry && (
+          <button onClick={onRetry} className="px-4 py-2 bg-[#2c1810] text-[#DAA520] border-2 border-[#8B4513] pixel-font text-xs hover:scale-105 transition-transform">
+             ↻ 重新鉴定 (RETRY)
+          </button>
+        )}
       </div>
     );
   }
