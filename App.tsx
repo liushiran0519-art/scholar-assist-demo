@@ -246,6 +246,35 @@ const App: React.FC = () => {
       }
     }
   };
+  const retrySummary = async () => {
+  if (!file || !fileFingerprint) return;
+  
+  setIsSummarizing(true);
+  setSummary(null); // 清空当前错误显示
+  
+  // 1. 删除旧缓存
+  await deleteSummary(fileFingerprint);
+  
+  try {
+    // 2. 重新生成
+    const textContent = await extractTextFromPdf(file.base64); // 注意：这里可能需要优化，不要重复提取
+    // 如果 fullText 已经有值，直接用
+    const textToUse = fullText || textContent; 
+    
+    const newSummary = await generatePaperSummary(textToUse);
+    
+    // 3. 只有成功才存
+    if (!newSummary.tags.includes("ERROR")) {
+        await saveSummary(fileFingerprint, file.name, newSummary, textToUse);
+    }
+    
+    setSummary(newSummary);
+  } catch (e) {
+    console.error(e);
+  } finally {
+    setIsSummarizing(false);
+  }
+};
 
   const handleCitationClick = async (id: string) => { 
     if (!fullText) return;
@@ -459,9 +488,14 @@ const App: React.FC = () => {
           )}
 
           {activeTab === SidebarTab.SUMMARY && (
-             <div className="p-0 h-full overflow-y-auto bg-[#f4ecd8]">
-               <SummaryView summary={summary} isLoading={isSummarizing} error={null} />
-             </div>
+              <div className="p-0 h-full overflow-y-auto bg-[#f4ecd8]">
+                <SummaryView 
+                  summary={summary} 
+                  isLoading={isSummarizing} 
+                  error={null} 
+                  onRetry={retrySummary} // ✅ 传递重试函数
+                />
+              </div>
           )}
           
           {activeTab === SidebarTab.CHAT && (
