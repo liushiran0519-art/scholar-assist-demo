@@ -1,6 +1,3 @@
-================================================
-FILE: App.tsx
-================================================
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { PaperFile, PaperSummary, SidebarTab, ChatMessage, AppMode, PageTranslation, CitationInfo, AppearanceSettings, Note } from './types';
 import { extractTextFromPdf, extractPageText, fileToBase64, base64ToBlobUrl } from './utils/pdfUtils';
