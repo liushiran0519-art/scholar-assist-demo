@@ -1,5 +1,4 @@
-// src/components/CursorSystem.tsx
-import React from 'react';
+import React, { useEffect } from 'react'; // ✅ 关键修复：必须包含 { useEffect }
 
 /**
  * Scholar Scroll - Cursor System
@@ -9,18 +8,13 @@ import React from 'react';
  * 3. Text: 魔法杖 (Staff)
  */
 
-// --- 1. SVG Assets (Base64 Encoded for performance) ---
-
-// 🪶 羽毛笔 (Default) - 笔尖在左上角 (0,0)
-// 金色笔身，深褐色轮廓，适合浅色和深色背景
+// 🪶 羽毛笔 (Default)
 const CURSOR_DEFAULT = `url('data:image/svg+xml;utf8,<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><path d="M2,2 L12,14 C16,18 24,20 28,16 C30,14 28,6 24,4 C20,2 14,8 14,8" stroke="%232c1810" stroke-width="2" fill="%23DAA520"/><path d="M2,2 L8,8" stroke="%232c1810" stroke-width="2"/><circle cx="2" cy="2" r="1" fill="%232c1810"/></svg>') 0 0, auto`;
 
-// 🧤 魔法手套 (Pointer) - 食指指尖在 (10, 2)
-// 只有当鼠标悬停在按钮上时显示
+// 🧤 魔法手套 (Pointer)
 const CURSOR_POINTER = `url('data:image/svg+xml;utf8,<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><path d="M10,2 L14,12 L18,12 L18,24 C18,26 14,28 10,28 C6,28 2,26 2,24 L2,12 L6,12 Z" fill="%238B4513" stroke="%23DAA520" stroke-width="2"/><rect x="8" y="14" width="4" height="4" fill="%23DAA520"/><circle cx="10" cy="2" r="1.5" fill="%23fff"/></svg>') 10 0, pointer`;
 
-// 🪄 魔法杖 (Text Selection) - 中心点在 (16, 16)
-// 替换原本枯燥的 "I" 形光标
+// 🪄 魔法杖 (Text Selection)
 const CURSOR_TEXT = `url('data:image/svg+xml;utf8,<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><path d="M16,4 L16,28" stroke="%23DAA520" stroke-width="2" stroke-linecap="round"/><path d="M13,4 L19,4" stroke="%232c1810" stroke-width="2"/><path d="M13,28 L19,28" stroke="%232c1810" stroke-width="2"/><circle cx="16" cy="16" r="2" fill="%23DAA520" stroke="%232c1810"/></svg>') 16 16, text`;
 
 
