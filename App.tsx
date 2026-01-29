@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { PaperFile, PaperSummary, SidebarTab, ChatMessage, AppMode, PageTranslation, CitationInfo, AppearanceSettings, Note } from './types';
-// ✅ 引入 base64ToBlobUrl
 import { extractTextFromPdf, extractPageText, fileToBase64, base64ToBlobUrl } from './utils/pdfUtils';
-import { generateFingerprint, getSummary, saveSummary, getPageTranslation, savePageTranslation, saveActiveSession, getActiveSession, clearActiveSession, deletePageTranslation, deleteSummary  } from './utils/storage';
+// ✅ 引入新的 Storage 函数
+import { generateFingerprint, saveFileToHistory, getAllHistory, getFileFromHistory, deleteFromHistory, updateSummaryInHistory, getPageTranslation, savePageTranslation, deletePageTranslation, saveActiveSession, getActiveSession, clearActiveSession } from './utils/storage';
 import { generatePaperSummary, chatWithPaper, translatePageContent, analyzeCitation, explainEquation } from './services/geminiService';
 import { chatWithDeepSeek } from './services/deepseekService';
 import SummaryView from './components/SummaryView';
@@ -19,6 +19,9 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SidebarTab | 'DUAL'>('DUAL');
   const [aiModel, setAiModel] = useState<'gemini' | 'deepseek'>('gemini');
   
+  // History State
+  const [historyList, setHistoryList] = useState<any[]>([]);
+
   // PDF State
   const [currentPage, setCurrentPage] = useState(1);
   const [debouncedPage, setDebouncedPage] = useState(1);
@@ -42,11 +45,9 @@ const App: React.FC = () => {
   const [fullText, setFullText] = useState<string>(""); 
   const [isSummarizing, setIsSummarizing] = useState(false);
   
-  // Translation State
   const [pageTranslations, setPageTranslations] = useState<Map<number, PageTranslation>>(new Map());
   const [isTranslatingPage, setIsTranslatingPage] = useState(false);
 
-  // Overlays
   const [citationInfo, setCitationInfo] = useState<CitationInfo | null>(null);
   const [equationExplanation, setEquationExplanation] = useState<string | null>(null);
   const [isAnalyzingCitation, setIsAnalyzingCitation] = useState(false);
@@ -56,11 +57,52 @@ const App: React.FC = () => {
   const [isChatting, setIsChatting] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // Cat Mascot State
   const [catMood, setCatMood] = useState<CatMood>('IDLE');
   const [catMessage, setCatMessage] = useState<string | null>(null);
 
-  // --- 0. Cat Mood Logic ---
+  // --- 0. Load History on Mount ---
+  useEffect(() => {
+    loadHistoryList();
+  }, []);
+
+  const loadHistoryList = async () => {
+    const list = await getAllHistory();
+    // 按时间倒序
+    setHistoryList(list.reverse());
+  };
+
+  // --- 1. Session Restoration ---
+  useEffect(() => {
+    const restoreSession = async () => {
+      try {
+        const session = await getActiveSession();
+        if (session) {
+          console.log("[Session] Found previous session:", session.fingerprint);
+          // 从历史记录完整恢复文件
+          await openFromHistory(session.fingerprint, session.currentPage);
+        }
+      } catch (e) {
+        console.error("Session restore failed", e);
+        await clearActiveSession();
+      }
+    };
+    // 只有在没有文件加载时尝试恢复
+    if (!file) {
+      restoreSession();
+    }
+  }, []);
+
+  // --- 2. Save Session ---
+  useEffect(() => {
+    if (file && fileFingerprint) {
+      const handler = setTimeout(() => {
+        saveActiveSession(fileFingerprint, debouncedPage);
+      }, 1000);
+      return () => clearTimeout(handler);
+    }
+  }, [fileFingerprint, debouncedPage]);
+
+  // --- 3. Cat Mood Logic ---
   useEffect(() => {
     if (isChatting) {
       setCatMood('THINKING');
@@ -79,59 +121,7 @@ const App: React.FC = () => {
     }
   }, [isChatting, isTranslatingPage, isSummarizing, isAnalyzingCitation, isAnalyzingEquation, fullText, summary]);
 
-  // --- 1. Session Restoration ---
-  useEffect(() => {
-    const restoreSession = async () => {
-      try {
-        const session = await getActiveSession();
-        if (session && session.file) {
-          console.log("[Session] Found previous session:", session.file.name);
-          
-          // 🚨 关键修复：从 base64 重新生成 Blob URL
-          // 之前的 session.file.url 是旧的 blob: 链接，已经失效了
-          let validUrl = session.file.url;
-          if (session.file.base64) {
-             validUrl = base64ToBlobUrl(session.file.base64, session.file.mimeType);
-          }
-
-          // 构建新的文件对象
-          const restoredFile: PaperFile = {
-            ...session.file,
-            url: validUrl // 替换为新生成的有效 URL
-          };
-
-          setFile(restoredFile);
-          setFileFingerprint(session.fingerprint);
-          setCurrentPage(session.currentPage || 1);
-          setDebouncedPage(session.currentPage || 1);
-          setMode(AppMode.READING);
-          
-          const cachedData = await getSummary(session.fingerprint);
-          if (cachedData) {
-            setSummary(cachedData.summary);
-            setFullText(cachedData.fullText || "");
-          }
-        }
-      } catch (e) {
-        console.error("Session restore failed", e);
-        // 如果恢复失败，清空会话防止死循环
-        await clearActiveSession();
-      }
-    };
-    restoreSession();
-  }, []);
-
-  // --- 2. Save Session ---
-  useEffect(() => {
-    if (file && fileFingerprint) {
-      const handler = setTimeout(() => {
-        saveActiveSession(file, fileFingerprint, debouncedPage);
-      }, 1000);
-      return () => clearTimeout(handler);
-    }
-  }, [file, fileFingerprint, debouncedPage]);
-
-  // --- 3. Debounce Page Change ---
+  // --- 4. Debounce Page Change ---
   useEffect(() => {
     const handler = setTimeout(() => {
       setDebouncedPage(currentPage);
@@ -139,7 +129,7 @@ const App: React.FC = () => {
     return () => clearTimeout(handler);
   }, [currentPage]);
 
-  // --- 4. Main Translation Logic ---
+  // --- 5. Main Translation Logic ---
   useEffect(() => {
     const loadTranslation = async () => {
       if (mode !== AppMode.READING || !file || !fileFingerprint) return;
@@ -151,9 +141,6 @@ const App: React.FC = () => {
 
       try {
         const cachedTrans = await getPageTranslation(fileFingerprint, pageNum);
-        
-        // 🔍 检查缓存是否有效 (防止缓存了报错信息)
-        // 如果缓存里只有一行且是 Error，就当作没缓存
         const isInvalidCache = cachedTrans && 
           cachedTrans.blocks.length === 1 && 
           (cachedTrans.blocks[0].en === "Error" || cachedTrans.blocks[0].cn.includes("AI 格式错误"));
@@ -163,7 +150,6 @@ const App: React.FC = () => {
           setPageTranslations(prev => new Map(prev).set(pageNum, cachedTrans));
         } else {
           if (isInvalidCache) {
-             console.log(`[Cache] 🗑️ 删除无效的缓存 Page ${pageNum}`);
              await deletePageTranslation(fileFingerprint, pageNum);
           }
 
@@ -173,16 +159,12 @@ const App: React.FC = () => {
           const newTrans = await translatePageContent(pageText);
           newTrans.pageNumber = pageNum;
 
-          // 🚨 关键修改：只有成功的结果才存入 DB
-          // 判断标准：blocks 数量 > 1 或者 第一块不是 Error
           const isSuccess = newTrans.blocks.length > 0 && 
                             newTrans.blocks[0].en !== "Error" && 
                             !newTrans.blocks[0].cn.includes("AI 格式错误");
 
           if (isSuccess) {
             await savePageTranslation(fileFingerprint, pageNum, newTrans);
-          } else {
-            console.warn("翻译结果异常，不写入缓存，仅在内存显示");
           }
           
           setPageTranslations(prev => new Map(prev).set(pageNum, newTrans));
@@ -197,14 +179,13 @@ const App: React.FC = () => {
     loadTranslation();
   }, [debouncedPage, fileFingerprint, mode, file]); 
 
+  // --- File Handling (Upload) ---
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files[0]) {
       const selectedFile = event.target.files[0];
       const base64Data = await fileToBase64(selectedFile);
       const fingerprint = await generateFingerprint(selectedFile, selectedFile.name, selectedFile.lastModified);
       
-      setFileFingerprint(fingerprint);
-
       const newFile: PaperFile = {
         name: selectedFile.name,
         url: URL.createObjectURL(selectedFile),
@@ -212,24 +193,40 @@ const App: React.FC = () => {
         mimeType: selectedFile.type
       };
 
+      // 1. 初始化状态
       setFile(newFile);
+      setFileFingerprint(fingerprint);
       setMode(AppMode.READING);
       setCurrentPage(1);
       setDebouncedPage(1);
+      setPageTranslations(new Map()); // Clear previous translations
       
+      // 2. 检查历史或生成摘要
       try {
         setIsSummarizing(true);
-        const cachedData = await getSummary(fingerprint);
+        // 先存入历史（占位，防止刷新丢失）
+        await saveFileToHistory(fingerprint, newFile); 
+
+        // 检查是否有现有摘要
+        const existingRecord = await getFileFromHistory(fingerprint);
         
-        if (cachedData) {
-          setSummary(cachedData.summary);
-          setFullText(cachedData.fullText || "");
+        if (existingRecord && existingRecord.summary && !existingRecord.summary.tags.includes("ERROR")) {
+          setSummary(existingRecord.summary);
+          setFullText(existingRecord.fullText || "");
           setIsSummarizing(false);
         } else {
+          // 生成新摘要
           const textContent = await extractTextFromPdf(base64Data);
           setFullText(textContent);
+          
+          // 更新历史记录（带全文）
+          await saveFileToHistory(fingerprint, newFile, textContent);
+
           const newSummary = await generatePaperSummary(textContent);
-          await saveSummary(fingerprint, selectedFile.name, newSummary, textContent);
+          
+          // 更新历史记录（带摘要）
+          await saveFileToHistory(fingerprint, newFile, textContent, newSummary);
+          
           setSummary(newSummary);
           setIsSummarizing(false);
         }
@@ -238,7 +235,7 @@ const App: React.FC = () => {
         setSummary({
           title: "解析失败",
           tags: ["ERROR"],
-          tldr: { painPoint: "读取失败", solution: "请检查PDF是否加密", effect: "无" },
+          tldr: { painPoint: "读取失败", solution: "请重试", effect: "无" },
           methodology: [],
           takeaways: []
         });
@@ -246,35 +243,80 @@ const App: React.FC = () => {
       }
     }
   };
-  const retrySummary = async () => {
-  if (!file || !fileFingerprint) return;
-  
-  setIsSummarizing(true);
-  setSummary(null); // 清空当前错误显示
-  
-  // 1. 删除旧缓存
-  await deleteSummary(fileFingerprint);
-  
-  try {
-    // 2. 重新生成
-    const textContent = await extractTextFromPdf(file.base64); // 注意：这里可能需要优化，不要重复提取
-    // 如果 fullText 已经有值，直接用
-    const textToUse = fullText || textContent; 
-    
-    const newSummary = await generatePaperSummary(textToUse);
-    
-    // 3. 只有成功才存
-    if (!newSummary.tags.includes("ERROR")) {
-        await saveSummary(fileFingerprint, file.name, newSummary, textToUse);
+
+  // --- History Handling ---
+  const openFromHistory = async (fingerprint: string, savedPage: number = 1) => {
+    try {
+      const record = await getFileFromHistory(fingerprint);
+      if (!record) return;
+
+      // 恢复 Blob URL
+      const validUrl = base64ToBlobUrl(record.fileData.base64, record.fileData.mimeType);
+      const restoredFile = { ...record.fileData, url: validUrl };
+
+      setFile(restoredFile);
+      setFileFingerprint(record.fingerprint);
+      setSummary(record.summary);
+      setFullText(record.fullText || "");
+      setCurrentPage(savedPage);
+      setDebouncedPage(savedPage);
+      setMode(AppMode.READING);
+      setPageTranslations(new Map());
+
+      // 更新最后阅读时间
+      await saveFileToHistory(fingerprint, restoredFile, record.fullText, record.summary);
+    } catch (e) {
+      console.error("Failed to open from history", e);
+      showToast("文件打开失败");
     }
+  };
+
+  const handleDeleteHistory = async (e: React.MouseEvent, fingerprint: string) => {
+    e.stopPropagation();
+    if (confirm("确定要删除这本卷轴吗？")) {
+      await deleteFromHistory(fingerprint);
+      loadHistoryList(); // 刷新列表
+    }
+  };
+
+  // --- 1. 修复：Summary Retry Logic ---
+  const retrySummary = async () => {
+    if (!file || !fileFingerprint) return;
     
-    setSummary(newSummary);
-  } catch (e) {
-    console.error(e);
-  } finally {
-    setIsSummarizing(false);
-  }
-};
+    setIsSummarizing(true);
+    setSummary(null); // 立即清空，让UI进入加载状态
+    
+    try {
+      // 1. 获取文本 (如果 fullText 为空则重新提取)
+      let textToUse = fullText;
+      if (!textToUse) {
+         textToUse = await extractTextFromPdf(file.base64);
+         setFullText(textToUse);
+      }
+
+      // 2. 重新调用 AI
+      const newSummary = await generatePaperSummary(textToUse);
+      
+      // 3. 只有成功才存入 DB
+      if (!newSummary.tags.includes("ERROR")) {
+          await updateSummaryInHistory(fileFingerprint, newSummary);
+      }
+      
+      setSummary(newSummary);
+    } catch (e) {
+      console.error(e);
+      // 再次设置错误状态，以便用户可以再次点击重试
+      setSummary({
+          title: "重试失败",
+          tags: ["ERROR"],
+          tldr: { painPoint: "连接依然不稳定", solution: "请再次尝试", effect: "无" },
+          methodology: [],
+          takeaways: []
+      });
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
 
   const handleCitationClick = async (id: string) => { 
     if (!fullText) return;
@@ -283,11 +325,8 @@ const App: React.FC = () => {
     try {
       const info = await analyzeCitation(id, fullText);
       setCitationInfo(info);
-    } catch(e) {
-      console.error(e);
-    } finally {
-      setIsAnalyzingCitation(false);
-    }
+    } catch(e) { console.error(e); } 
+    finally { setIsAnalyzingCitation(false); }
   };
 
   const handleEquationClick = async (eq: string) => { 
@@ -305,11 +344,7 @@ const App: React.FC = () => {
       setActiveTab(SidebarTab.CHAT);
       handleSendMessage(`请通俗解释这段话：\n"${text}"`);
     } else if (action === 'save') {
-      const newNote: Note = {
-        id: Date.now().toString(),
-        text: text,
-        date: new Date().toLocaleString()
-      };
+      const newNote: Note = { id: Date.now().toString(), text: text, date: new Date().toLocaleString() };
       setNotes(prev => [newNote, ...prev]);
       setActiveTab(SidebarTab.NOTES);
       showToast("已收藏至魔法笔记！");
@@ -320,14 +355,12 @@ const App: React.FC = () => {
     const newUserMsg: ChatMessage = { role: 'user', text };
     setChatMessages(prev => [...prev, newUserMsg]);
     setIsChatting(true);
-    
     try {
       let answer = '';
+      const context = fullText || "No context available."; 
       if (aiModel === 'deepseek') {
-        const response = await chatWithDeepSeek(text);
-        answer = response || "DeepSeek 没有返回内容";
+        answer = await chatWithDeepSeek(text) || "Error";
       } else {
-        const context = fullText || "No context available."; 
         const historyForApi = chatMessages.map(m => ({ role: m.role, text: m.text }));
         answer = await chatWithPaper(historyForApi, text, context);
       }
@@ -339,16 +372,13 @@ const App: React.FC = () => {
     }
   };
 
-  const resetApp = async () => {
-    await clearActiveSession();
+  // --- 2. 修复：返回书架 (Back Button) ---
+  const goBackToBookshelf = async () => {
+    await clearActiveSession(); // 清除当前活跃状态，但不删历史
     setFile(null);
     setFileFingerprint(null);
     setMode(AppMode.UPLOAD);
-    setSummary(null);
-    setChatMessages([]);
-    setPageTranslations(new Map());
-    setCurrentPage(1);
-    setDebouncedPage(1);
+    loadHistoryList(); // 重新加载列表
   };
   
   const showToast = (msg: string) => {
@@ -362,6 +392,7 @@ const App: React.FC = () => {
     setTimeout(() => setCatMood('IDLE'), 2000);
   };
 
+  // Resizer Logic (Keep existing)
   const startResizing = useCallback(() => { isResizing.current = true; document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none'; }, []);
   const stopResizing = useCallback(() => { isResizing.current = false; document.body.style.cursor = ''; document.body.style.userSelect = ''; }, []);
   const resize = useCallback((e: MouseEvent) => {
@@ -376,33 +407,74 @@ const App: React.FC = () => {
     return () => { window.removeEventListener('mousemove', resize); window.removeEventListener('mouseup', stopResizing); };
   }, [resize, stopResizing]);
 
+  // --- RENDER: BOOKSHELF MODE ---
   if (mode === AppMode.UPLOAD) {
     return (
-       <div className="min-h-screen bg-[#2c1810] flex flex-col items-center justify-center p-4 relative overflow-hidden">
-        <div className="max-w-xl w-full text-center space-y-8 animate-in fade-in duration-700 relative z-10">
+       <div className="min-h-screen bg-[#2c1810] flex flex-col items-center p-4 relative overflow-hidden">
+        {/* Title */}
+        <div className="max-w-4xl w-full text-center space-y-4 animate-in fade-in duration-700 relative z-10 mt-10">
           <div>
-             <div className="bg-[#8B4513] w-20 h-20 mx-auto flex items-center justify-center mb-6 rpg-border shadow-[4px_4px_0_0_#1a0f0a]">
-              <BookOpenIcon className="text-[#DAA520] w-10 h-10" />
+             <div className="bg-[#8B4513] w-16 h-16 mx-auto flex items-center justify-center mb-4 rpg-border shadow-[4px_4px_0_0_#1a0f0a]">
+              <BookOpenIcon className="text-[#DAA520] w-8 h-8" />
             </div>
-            <h1 className="text-4xl font-bold text-[#e8e4d9] mb-3 pixel-font">Scholar Scroll</h1>
-            <p className="text-lg text-[#DAA520] serif italic">研读卷轴 · 解锁古老知识的秘密</p>
+            <h1 className="text-3xl font-bold text-[#e8e4d9] mb-2 pixel-font">Scholar Scroll</h1>
+            <p className="text-sm text-[#DAA520] serif italic">研读卷轴 · 书架 (The Bookshelf)</p>
           </div>
 
-          <div className="bg-[#e8e4d9] p-10 rpg-border hover:brightness-110 transition-all cursor-pointer group relative shadow-[8px_8px_0_0_#1a0f0a]">
+          {/* New Upload Card */}
+          <div className="bg-[#e8e4d9] p-6 rpg-border hover:brightness-110 transition-all cursor-pointer group relative shadow-[8px_8px_0_0_#1a0f0a] max-w-md mx-auto">
             <input type="file" accept=".pdf" onChange={handleFileChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-            <div className="space-y-4">
-              <div className="w-16 h-16 bg-[#2c1810] rounded-full flex items-center justify-center mx-auto border-2 border-[#DAA520]">
-                <UploadIcon className="w-8 h-8 text-[#DAA520]" />
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 bg-[#2c1810] rounded-full flex items-center justify-center border-2 border-[#DAA520]">
+                <UploadIcon className="w-6 h-6 text-[#DAA520]" />
               </div>
-              <p className="font-bold text-lg text-[#2c1810] pixel-font">召唤 PDF 卷轴</p>
+              <div className="text-left">
+                <p className="font-bold text-base text-[#2c1810] pixel-font">召唤新卷轴</p>
+                <p className="text-xs text-[#5c4033] serif">Upload New PDF</p>
+              </div>
             </div>
           </div>
-          <div className="text-[#8B4513] text-xs serif italic">* 自动缓存：刷新页面不会丢失进度</div>
+        </div>
+
+        {/* History Grid */}
+        <div className="max-w-4xl w-full mt-12 z-10 pb-20">
+          <h2 className="text-[#DAA520] pixel-font text-xs mb-4 border-b border-[#DAA520]/30 pb-2">最近阅读 (RECENT SCROLLS)</h2>
+          
+          {historyList.length === 0 ? (
+            <p className="text-[#8B4513] text-center text-sm italic mt-8">暂无阅读记录，请上传第一份卷轴...</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+               {historyList.map((item) => (
+                 <div 
+                    key={item.fingerprint}
+                    onClick={() => openFromHistory(item.fingerprint)}
+                    className="bg-[#3e2723] border-2 border-[#8B4513] p-4 rounded hover:bg-[#4e342e] transition-colors cursor-pointer group relative shadow-lg"
+                 >
+                    <div className="flex justify-between items-start">
+                       <h3 className="text-[#e8e4d9] font-bold text-sm line-clamp-2 mb-2 pr-6 h-10">{item.name}</h3>
+                       <button 
+                         onClick={(e) => handleDeleteHistory(e, item.fingerprint)}
+                         className="text-[#8B4513] hover:text-red-400 absolute top-2 right-2"
+                         title="销毁卷轴"
+                       >
+                         <XIcon className="w-4 h-4" />
+                       </button>
+                    </div>
+                    
+                    <div className="text-[10px] text-[#DAA520]/80 space-y-1 mt-2">
+                       <p>📅 {new Date(item.lastOpenedAt).toLocaleDateString()}</p>
+                       <p>🏷️ {item.summary?.title ? "已解析" : "未解析"}</p>
+                    </div>
+                 </div>
+               ))}
+            </div>
+          )}
         </div>
       </div>
     );
   }
 
+  // --- RENDER: READING MODE ---
   return (
     <div className={`flex flex-col h-screen overflow-hidden font-sans ${appearance.theme === 'sepia' ? 'bg-[#F4ECD8]' : 'bg-[#2c1810]'}`}>
       <div className={`h-16 border-b-4 flex items-center px-4 justify-between shrink-0 shadow-lg z-50 ${appearance.theme === 'sepia' ? 'bg-[#e8e4d9] border-[#8B4513]' : 'bg-[#2c1810] border-[#8B4513]'}`}>
@@ -436,7 +508,15 @@ const App: React.FC = () => {
                   </div>
                 </div>
             )}
-            <button onClick={resetApp} className="text-[#e8e4d9] hover:text-red-400 p-2"><XIcon className="w-6 h-6" /></button>
+            {/* ✅ 改为返回书架按钮 */}
+            <button 
+              onClick={goBackToBookshelf} 
+              className="text-[#e8e4d9] hover:text-red-400 p-2 flex items-center gap-1 border border-transparent hover:border-[#e8e4d9] rounded"
+              title="返回书架"
+            >
+              <span className="text-xs font-bold pixel-font hidden md:inline">EXIT</span>
+              <XIcon className="w-6 h-6" />
+            </button>
          </div>
       </div>
 
@@ -470,11 +550,9 @@ const App: React.FC = () => {
                isLoading={isTranslatingPage}
                onHoverBlock={setHighlightText}
                onRetry={async () => {
-                   // 1. 先从 DB 删除脏数据
                    if (fileFingerprint) {
                      await deletePageTranslation(fileFingerprint, debouncedPage);
                    }
-                   // 2. 再清空 React State，触发 useEffect 重新请求
                    setPageTranslations(prev => {
                        const newMap = new Map(prev);
                        newMap.delete(debouncedPage);
@@ -493,7 +571,7 @@ const App: React.FC = () => {
                   summary={summary} 
                   isLoading={isSummarizing} 
                   error={null} 
-                  onRetry={retrySummary} // ✅ 传递重试函数
+                  onRetry={retrySummary} // ✅ 确保这里传递了 retrySummary
                 />
               </div>
           )}
