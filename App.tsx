@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Page } from 'react-pdf'; 
 import ReactMarkdown from 'react-markdown';
 import { PaperFile, PaperSummary, SidebarTab, ChatMessage, AppMode, PageTranslation, ContentBlock, CitationInfo, AppearanceSettings, Note } from './types';
+import { extractTextFromPdf } from './utils/pdfUtils';
 import { generatePaperSummary, chatWithPaper, translatePageContent, analyzeCitation, explainEquation } from './services/geminiService';
 import { chatWithDeepSeek } from './services/deepseekService';
 import SummaryView from './components/SummaryView';
@@ -147,6 +148,31 @@ const App: React.FC = () => {
   }, [resize, stopResizing]);
 
 
+  const handleFileUpload = async (file: File) => {
+  // 1. 转 Base64 (用于显示 PDF)
+  const base64 = await fileToBase64(file); 
+  setPdfData(base64);
+
+  try {
+    setIsLoading(true);
+
+    // 2. ✨ 关键步骤：先提取纯文本
+    console.log("正在提取 PDF 文本...");
+    const textContent = await extractTextFromPdf(base64);
+    
+    // 3. 把提取出来的几万字纯文本发给 AI
+    console.log("正在召唤学术猫...");
+    const summary = await generatePaperSummary(textContent);
+    
+    setSummary(summary);
+
+  } catch (error) {
+    console.error("处理失败:", error);
+    alert("学术猫没能看懂这篇论文 (可能是扫描版PDF？)");
+  } finally {
+    setIsLoading(false);
+  }
+};
   // File Handler
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files[0]) {
