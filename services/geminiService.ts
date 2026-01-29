@@ -3,18 +3,17 @@ import { PaperSummary, PageTranslation, CitationInfo, ChatMessage } from "../typ
 // ================= 配置区域 =================
 
 // 1. 读取环境变量 (适配 Vercel 反代)
+// 确保 .env 中有 VITE_PROXY_API_KEY
 const API_KEY = import.meta.env.VITE_PROXY_API_KEY;
 
-// 2. 指定模型名称 (按你要求)
+// 2. 指定模型名称
 const MODEL_NAME = '[贩子死妈]gemini-3-flash-preview'; 
 
 // ================= 工具函数 =================
 
-/**
- * 清洗 JSON 字符串 (去除 Markdown 代码块，防止 JSON.parse 报错)
- */
 function cleanJson(text: string): string {
   if (!text) return "{}";
+  // 简单清洗 markdown 标记
   return text.replace(/```json/g, '').replace(/```/g, '').trim();
 }
 
@@ -33,13 +32,12 @@ async function callProxyApi(messages: any[], jsonMode = false) {
   };
 
   const body: any = {
-    model: MODEL_NAME, // 使用指定模型
+    model: MODEL_NAME,
     messages: messages,
     stream: false,
     temperature: 0.7
   };
 
-  // 如果需要强制 JSON 输出
   if (jsonMode) {
     body.response_format = { type: "json_object" };
   }
@@ -54,13 +52,11 @@ async function callProxyApi(messages: any[], jsonMode = false) {
 
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
-      // 抛出错误供前端捕获
       throw new Error(`API Error ${response.status}: ${errData.error?.message || response.statusText}`);
     }
 
     const data = await response.json();
     
-    // 兼容性检查：防止空返回
     if (!data.choices || !data.choices[0] || !data.choices[0].message) {
         throw new Error("服务返回了空数据");
     }
@@ -73,13 +69,9 @@ async function callProxyApi(messages: any[], jsonMode = false) {
   }
 }
 
-// ================= 核心业务函数 (纯文本省钱版) =================
+// ================= 核心业务函数 =================
 
-/**
- * 1. 生成论文摘要 (基于纯文本)
- */
 export const generatePaperSummary = async (fullText: string): Promise<PaperSummary> => {
-  // 截取前 30k 字符，既省钱又能覆盖大部分论文核心
   const truncatedText = fullText.slice(0, 30000);
 
   const prompt = `
@@ -110,7 +102,6 @@ export const generatePaperSummary = async (fullText: string): Promise<PaperSumma
     return JSON.parse(cleanJson(responseText)) as PaperSummary;
   } catch (error) {
     console.error("Summary generation failed:", error);
-    // 返回兜底数据
     return {
       title: "解读中断",
       tags: ["系统维护中"],
@@ -121,9 +112,6 @@ export const generatePaperSummary = async (fullText: string): Promise<PaperSumma
   }
 };
 
-/**
- * 2. 翻译页面内容 (基于纯文本)
- */
 export const translatePageContent = async (pageText: string): Promise<PageTranslation> => {
   if (!pageText || pageText.trim().length < 10) {
      return {
@@ -168,19 +156,16 @@ export const translatePageContent = async (pageText: string): Promise<PageTransl
     console.error("Translation failed:", error);
     return {
       pageNumber: 0,
-      blocks: [{ type: "paragraph", en: "Error", cn: "翻译服务暂不可用，请稍后重试。" }],
+      blocks: [{ type: "paragraph", en: "Error", cn: "喵呜！这页纸太难懂了，翻译魔法失效了... (解析错误)" }],
       glossary: []
     };
   }
 };
 
-/**
- * 3. 对话功能 (带历史记录 + 上下文)
- */
 export const chatWithPaper = async (
   history: { role: 'user' | 'model'; text: string }[], 
   newMessage: string, 
-  contextText: string // 传入纯文本上下文
+  contextText: string
 ): Promise<string> => {
   
   const systemPrompt = `
@@ -189,15 +174,12 @@ export const chatWithPaper = async (
     风格：活泼可爱，句尾带 [=^..^=]。
   `;
 
-  // 构造消息
   const messages = [
     { role: "system", content: systemPrompt },
     {
        role: "user",
-       // 将上下文作为背景知识发给 AI
        content: `Context (Paper content):\n${contextText.slice(0, 10000)}\n\nUser Question: ${newMessage}`
     },
-    // 历史记录 (只取最近几条以节省 Token，这里由调用方控制或 slice)
     ...history.slice(-4).map(h => ({
       role: h.role === 'model' ? 'assistant' : 'user',
       content: h.text
@@ -211,9 +193,6 @@ export const chatWithPaper = async (
   }
 };
 
-/**
- * 4. 引用分析 (纯文本版)
- */
 export const analyzeCitation = async (citationId: string, contextText: string): Promise<CitationInfo> => {
     const prompt = `
         Find the citation labelled "${citationId}" in the text below. 
@@ -234,9 +213,6 @@ export const analyzeCitation = async (citationId: string, contextText: string): 
     }
 };
 
-/**
- * 5. 解释公式 (纯文本版)
- */
 export const explainEquation = async (equationText: string): Promise<string> => {
     try {
         const text = await callProxyApi([
@@ -248,9 +224,6 @@ export const explainEquation = async (equationText: string): Promise<string> => 
     }
 };
 
-/**
- * 6. 划词翻译
- */
 export const translateSelection = async (text: string): Promise<string> => {
     try {
         return await callProxyApi([
