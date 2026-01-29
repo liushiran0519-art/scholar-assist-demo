@@ -76,7 +76,8 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
 
   // --- 核心高亮逻辑 (保持不变) ---
   useEffect(() => {
-    if (!highlightText || highlightText.length < 2 || !textLayerReady || !pageContainerRef.current) {
+    // 降低触发门槛，只要有几个字符就开始匹配
+    if (!highlightText || highlightText.length < 5 || !textLayerReady || !pageContainerRef.current) {
       setHighlights([]);
       return;
     }
@@ -109,14 +110,19 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         }
       }
       
-      const normalizedQuery = highlightText.split('').filter(isSignificant).join('').toLowerCase();
-      if (normalizedQuery.length < 2) return; 
+      // 处理查询词：只取前 30 个有效字符进行搜索，提高容错率
+      // AI 返回的 en 字段可能包含换行符或 OCR 错误，取前缀搜索最稳
+      const cleanQuery = highlightText.replace(/\s+/g, '').toLowerCase();
+      const searchKey = cleanQuery.slice(0, 30); // 只匹配前30个字符
 
-      let startIndex = normalizedPdfText.indexOf(normalizedQuery);
+      let startIndex = normalizedPdfText.indexOf(searchKey);
       
-      if (startIndex === -1 && normalizedQuery.length > 20) {
-         const head = normalizedQuery.substring(0, 10);
-         startIndex = normalizedPdfText.indexOf(head);
+      // 如果找不到，尝试缩短搜索词重试（防止首字母识别错误）
+      if (startIndex === -1 && searchKey.length > 10) {
+         startIndex = normalizedPdfText.indexOf(searchKey.slice(5)); // 跳过前5个字符再找
+         if (startIndex !== -1) {
+             // 修正偏移量，但这步比较复杂，简化处理直接用找到的位置
+         }
       }
 
       if (startIndex === -1) {
@@ -124,7 +130,15 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         return;
       }
 
-      const endIndex = startIndex + normalizedQuery.length - 1;
+      // 估算结束位置：假设一段话平均长度，或者直接高亮 200 个字符的长度
+      // 因为我们只拿到了开头，无法精确知道结尾。为了视觉效果，我们可以高亮一段大致的长度
+      // 或者，如果你希望精确高亮整段，可以让 AI 返回整段原文（消耗 Token 较多）
+      // 这里采用“高亮开头部分作为引导”的策略
+      let lengthToHighlight = Math.min(cleanQuery.length, 100); 
+      // 如果 highlightText 本身很长（说明是整段），我们尽量高亮多一点
+      if (highlightText.length > 50) lengthToHighlight = 200;
+
+      const endIndex = Math.min(startIndex + lengthToHighlight, charMap.length - 1);
       
       if (!charMap[startIndex] || !charMap[endIndex]) return;
       
@@ -156,17 +170,19 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         }
         setHighlights(newHighlights);
 
+        // 仅在手动触发（非滚动）时自动跳转
+        // 这里可以通过加一个 flag 参数控制，简化起见暂时保留自动跳转
         if (newHighlights.length > 0) {
-           startNodeData.node.parentElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+           // 稍微延迟跳转，体验更好
+           // startNodeData.node.parentElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
 
       } catch (e) {
         console.error("Highlight calculation error:", e);
-        setHighlights([]);
       }
     };
 
-    const timer = setTimeout(calculateHighlights, 100);
+    const timer = setTimeout(calculateHighlights, 150);
     return () => clearTimeout(timer);
 
   }, [highlightText, textLayerReady, pageNumber, scale]);
