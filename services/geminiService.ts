@@ -11,15 +11,45 @@ const MODEL_NAME = '[贩子死妈]gemini-3-flash-preview';
 
 // ================= 工具函数 =================
 
-function cleanJson(text: string): string {
-  if (!text) return "{}";
-  // 简单清洗 markdown 标记
-  return text.replace(/```json/g, '').replace(/```/g, '').trim();
-}
+function cleanAndParseJson(text: string): any {
+  if (!text) return null;
 
-/**
- * 通用 Fetch 请求封装 (指向 /api/proxy)
- */
+  try {
+    // 1. 尝试直接解析
+    return JSON.parse(text);
+  } catch (e1) {
+    // 2. 失败了，尝试清洗 Markdown
+    let clean = text.replace(/```json/g, '').replace(/```/g, '');
+    
+    // 3. 寻找最外层的 {}
+    const firstOpen = clean.indexOf('{');
+    const lastClose = clean.lastIndexOf('}');
+    
+    if (firstOpen !== -1 && lastClose !== -1) {
+      clean = clean.substring(firstOpen, lastClose + 1);
+      try {
+        return JSON.parse(clean);
+      } catch (e2) {
+        console.warn("二次 JSON 解析失败，尝试暴力修复...");
+      }
+    }
+  }
+
+  // 4. 如果所有解析都失败了（比如 AI 返回了纯文本），不要抛出错误让 App 崩溃
+  // 而是伪造一个合法的 JSON 返回，把错误文本放进去显示给用户
+  console.warn("AI 返回了非 JSON 格式:", text);
+  return {
+    raw_error: true, // 标记这是个错误数据
+    blocks: [
+      { 
+        type: "paragraph", 
+        en: text.slice(0, 500), // 截取一部分原文
+        cn: "【AI 格式错误】AI 返回了非结构化数据，以上是其原始回复。" 
+      }
+    ],
+    glossary: []
+  };
+}
 async function callProxyApi(messages: any[], jsonMode = false) {
   if (!API_KEY) {
     console.error("❌ 反代配置缺失！请在 .env 中设置 VITE_PROXY_API_KEY");
@@ -145,8 +175,17 @@ export const translatePageContent = async (pageText: string): Promise<PageTransl
 
   try {
     const responseText = await callProxyApi([{ role: "user", content: prompt }], true);
-    const data = JSON.parse(cleanJson(responseText));
+    const data = cleanAndParseJson(responseText); // 使用增强版解析
     
+    // 检查是否是我们的兜底错误对象
+    if (data && data.raw_error) {
+       return {
+         pageNumber: 0,
+         blocks: data.blocks,
+         glossary: []
+       };
+    }
+
     return {
       pageNumber: 0,
       blocks: data.blocks || [],
@@ -156,7 +195,7 @@ export const translatePageContent = async (pageText: string): Promise<PageTransl
     console.error("Translation failed:", error);
     return {
       pageNumber: 0,
-      blocks: [{ type: "paragraph", en: "Error", cn: "喵呜！这页纸太难懂了，翻译魔法失效了... (解析错误)" }],
+      blocks: [{ type: "paragraph", en: "Error", cn: "翻译服务连接失败，请点击右上角重试。" }],
       glossary: []
     };
   }
