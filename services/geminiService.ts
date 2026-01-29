@@ -111,13 +111,14 @@ export const translatePageContent = async (pageText: string): Promise<PageTransl
      return { pageNumber: 0, blocks: [], glossary: [] };
   }
 
+  // 🔴 修复：修改 Requirement 2，要求返回完整原文，而不是前20个字符
   const prompt = `
     Task: Translate academic paper text to Chinese.
     Output JSON format only.
     
     Requirements:
     1. Break text into logical blocks (paragraph, heading, equation, etc).
-    2. 'en': The EXACT first 20 chars of the source text (for highlighting).
+    2. 'en': The COMPLETE original English text of the block (do not truncate, needed for full highlighting).
     3. 'cn': Academic Chinese translation.
     
     Input:
@@ -128,7 +129,7 @@ export const translatePageContent = async (pageText: string): Promise<PageTransl
     JSON Structure:
     {
       "blocks": [
-        { "type": "paragraph", "en": "The logical first 20 chars...", "cn": "翻译内容..." }
+        { "type": "paragraph", "en": "The complete original English text of the paragraph...", "cn": "翻译内容..." }
       ],
       "glossary": [{ "term": "English Term", "definition": "Chinese Explanation" }]
     }
