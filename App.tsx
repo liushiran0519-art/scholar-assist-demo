@@ -1,3 +1,6 @@
+================================================
+FILE: App.tsx
+================================================
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { PaperFile, PaperSummary, SidebarTab, ChatMessage, AppMode, PageTranslation, CitationInfo, AppearanceSettings, Note } from './types';
 import { extractTextFromPdf, extractPageText, fileToBase64, base64ToBlobUrl } from './utils/pdfUtils';
@@ -27,17 +30,23 @@ const App: React.FC = () => {
   const [highlightText, setHighlightText] = useState<string | null>(null);
   const [pdfSelectedText, setPdfSelectedText] = useState<string | null>(null); // 新增：PDF 选中的文本
 
-  // Layout State
-  const [leftWidth, setLeftWidth] = useState(50);
+  // Layout State (持久化)
+  const [leftWidth, setLeftWidth] = useState(() => {
+    const saved = localStorage.getItem('scholar_layout_width');
+    return saved ? parseFloat(saved) : 50;
+  });
   const isResizing = useRef(false);
   const pdfContainerRef = useRef<HTMLDivElement>(null);
 
-  // Settings
+  // Settings (持久化)
   const [showSettings, setShowSettings] = useState(false);
-  const [appearance, setAppearance] = useState<AppearanceSettings>({
-    theme: 'sepia',
-    fontSize: 16,
-    fontFamily: 'serif'
+  const [appearance, setAppearance] = useState<AppearanceSettings>(() => {
+    const saved = localStorage.getItem('scholar_appearance');
+    return saved ? JSON.parse(saved) : {
+      theme: 'sepia',
+      fontSize: 16,
+      fontFamily: 'serif'
+    };
   });
 
   const [notes, setNotes] = useState<Note[]>([]);
@@ -177,68 +186,128 @@ const App: React.FC = () => {
     loadTranslation();
   }, [debouncedPage, fileFingerprint, mode, file]); 
 
-  // --- File Handling (Upload) ---
-  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files && event.target.files[0]) {
-      const selectedFile = event.target.files[0];
-      const base64Data = await fileToBase64(selectedFile);
-      const fingerprint = await generateFingerprint(selectedFile, selectedFile.name, selectedFile.lastModified);
-      
-      const newFile: PaperFile = {
-        name: selectedFile.name,
-        url: URL.createObjectURL(selectedFile),
-        base64: base64Data,
-        mimeType: selectedFile.type
-      };
+  // --- 🆕 6. Persistence Effects (Settings & Layout) ---
+  useEffect(() => {
+    localStorage.setItem('scholar_layout_width', leftWidth.toString());
+  }, [leftWidth]);
 
-      setFile(newFile);
-      setFileFingerprint(fingerprint);
-      setMode(AppMode.READING);
-      setCurrentPage(1);
-      setDebouncedPage(1);
-      setPageTranslations(new Map());
-      setSummary(null); // 清空旧摘要
-      
-      try {
-        setIsSummarizing(true);
-        // 上传时立即保存基础信息到历史，确保即使立即退出也有记录
-        await saveFileToHistory(fingerprint, newFile);
+  useEffect(() => {
+    localStorage.setItem('scholar_appearance', JSON.stringify(appearance));
+  }, [appearance]);
 
-        const existingRecord = await getFileFromHistory(fingerprint);
+  // --- 🆕 7. Hotkeys (Keyboard Support) ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // 忽略输入框内的按键
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
+
+      switch (e.key) {
+        case 'ArrowLeft':
+          if (mode === AppMode.READING && currentPage > 1) {
+            setCurrentPage(p => p - 1);
+          }
+          break;
+        case 'ArrowRight':
+          if (mode === AppMode.READING) {
+             // 简单的翻页逻辑，react-pdf 会处理边界
+             setCurrentPage(p => p + 1); 
+          }
+          break;
+        case 'Escape':
+          if (citationInfo) setCitationInfo(null);
+          if (equationExplanation) setEquationExplanation(null);
+          if (showSettings) setShowSettings(false);
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [mode, currentPage, citationInfo, equationExplanation, showSettings]);
+
+
+  // --- File Handling (Upload & Drop) ---
+  
+  // 提取通用的文件处理逻辑
+  const processUploadedFile = async (selectedFile: File) => {
+    const base64Data = await fileToBase64(selectedFile);
+    const fingerprint = await generateFingerprint(selectedFile, selectedFile.name, selectedFile.lastModified);
+    
+    const newFile: PaperFile = {
+      name: selectedFile.name,
+      url: URL.createObjectURL(selectedFile),
+      base64: base64Data,
+      mimeType: selectedFile.type
+    };
+
+    setFile(newFile);
+    setFileFingerprint(fingerprint);
+    setMode(AppMode.READING);
+    setCurrentPage(1);
+    setDebouncedPage(1);
+    setPageTranslations(new Map());
+    setSummary(null); 
+    
+    try {
+      setIsSummarizing(true);
+      await saveFileToHistory(fingerprint, newFile);
+
+      const existingRecord = await getFileFromHistory(fingerprint);
+      
+      if (existingRecord && existingRecord.summary && !existingRecord.summary.tags.includes("ERROR")) {
+        setSummary(existingRecord.summary);
+        setFullText(existingRecord.fullText || "");
+        setIsSummarizing(false);
+      } else {
+        const textContent = await extractTextFromPdf(base64Data);
+        setFullText(textContent);
         
-        if (existingRecord && existingRecord.summary && !existingRecord.summary.tags.includes("ERROR")) {
-          setSummary(existingRecord.summary);
-          setFullText(existingRecord.fullText || "");
-          setIsSummarizing(false);
-        } else {
-          const textContent = await extractTextFromPdf(base64Data);
-          setFullText(textContent);
-          
-          // 更新历史（带全文）
-          await saveFileToHistory(fingerprint, newFile, textContent);
+        await saveFileToHistory(fingerprint, newFile, textContent);
 
-          const newSummary = await generatePaperSummary(textContent);
-          
-          // 更新历史（带摘要）
-          await saveFileToHistory(fingerprint, newFile, textContent, newSummary);
-          
-          setSummary(newSummary);
-          setIsSummarizing(false);
-        }
-      } catch (error) {
-        console.error("Processing failed:", error);
-        // 生成一个错误状态的 Summary，方便 UI 显示重试按钮
-        const errorSummary: PaperSummary = {
-          title: "解析失败",
-          tags: ["ERROR"],
-          tldr: { painPoint: "读取失败", solution: "请重试", effect: "无" },
-          methodology: [],
-          takeaways: []
-        };
-        setSummary(errorSummary);
+        const newSummary = await generatePaperSummary(textContent);
+        
+        await saveFileToHistory(fingerprint, newFile, textContent, newSummary);
+        
+        setSummary(newSummary);
         setIsSummarizing(false);
       }
+    } catch (error) {
+      console.error("Processing failed:", error);
+      const errorSummary: PaperSummary = {
+        title: "解析失败",
+        tags: ["ERROR"],
+        tldr: { painPoint: "读取失败", solution: "请重试", effect: "无" },
+        methodology: [],
+        takeaways: []
+      };
+      setSummary(errorSummary);
+      setIsSummarizing(false);
     }
+  };
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files[0]) {
+      await processUploadedFile(event.target.files[0]);
+    }
+  };
+
+  // 🆕 拖拽上传处理
+  const handleDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const file = e.dataTransfer.files[0];
+      if (file.type !== 'application/pdf') {
+          showToast("请投喂 PDF 卷轴喵！(PDF only)");
+          return;
+      }
+      await processUploadedFile(file);
+    }
+  }, []);
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
   };
 
   // --- History Handling ---
@@ -283,7 +352,7 @@ const App: React.FC = () => {
   const retrySummary = async () => {
     if (!file) return;
     setIsSummarizing(true);
-    setSummary(null); // 清空以显示 Loading
+    setSummary(null); 
     
     try {
       let text = await extractTextFromPdf(file.base64);
@@ -333,7 +402,6 @@ const App: React.FC = () => {
   };
 
   const handleContextSelection = (text: string, action: 'explain' | 'save') => {
-    // 移除 action === 'highlight'，改用 onTextHover 处理，保持类型清洁
     if (action === 'explain') {
       setActiveTab(SidebarTab.CHAT);
       handleSendMessage(`请通俗解释这段话：\n"${text}"`);
@@ -406,14 +474,18 @@ const App: React.FC = () => {
   // --- RENDER: BOOKSHELF MODE ---
   if (mode === AppMode.UPLOAD) {
     return (
-       <div className="min-h-screen bg-[#2c1810] flex flex-col items-center p-4 relative overflow-hidden">
+       <div 
+        className="min-h-screen bg-[#2c1810] flex flex-col items-center p-4 relative overflow-hidden"
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+       >
         <div className="max-w-4xl w-full text-center space-y-4 animate-in fade-in duration-700 relative z-10 mt-10">
           <div>
-             <div className="bg-[#8B4513] w-16 h-16 mx-auto flex items-center justify-center mb-4 rpg-border shadow-[4px_4px_0_0_#1a0f0a]">
-              <BookOpenIcon className="text-[#DAA520] w-8 h-8" />
-            </div>
-            <h1 className="text-3xl font-bold text-[#e8e4d9] mb-2 pixel-font">Scholar Scroll</h1>
-            <p className="text-sm text-[#DAA520] serif italic">研读卷轴 · 书架 (The Bookshelf)</p>
+              <div className="bg-[#8B4513] w-16 h-16 mx-auto flex items-center justify-center mb-4 rpg-border shadow-[4px_4px_0_0_#1a0f0a]">
+               <BookOpenIcon className="text-[#DAA520] w-8 h-8" />
+             </div>
+             <h1 className="text-3xl font-bold text-[#e8e4d9] mb-2 pixel-font">Scholar Scroll</h1>
+             <p className="text-sm text-[#DAA520] serif italic">研读卷轴 · 书架 (The Bookshelf)</p>
           </div>
 
           <div className="bg-[#e8e4d9] p-6 rpg-border hover:brightness-110 transition-all cursor-pointer group relative shadow-[8px_8px_0_0_#1a0f0a] max-w-md mx-auto">
@@ -424,8 +496,12 @@ const App: React.FC = () => {
               </div>
               <div className="text-left">
                 <p className="font-bold text-base text-[#2c1810] pixel-font">召唤新卷轴</p>
-                <p className="text-xs text-[#5c4033] serif">Upload New PDF</p>
+                <p className="text-xs text-[#5c4033] serif">Drag & Drop or Click to Upload</p>
               </div>
+            </div>
+            {/* 拖拽提示遮罩 */}
+            <div className="absolute inset-0 bg-[#DAA520]/20 hidden group-hover:flex items-center justify-center pointer-events-none">
+                <p className="pixel-font text-[#2c1810] font-bold">DROP SCROLL HERE!</p>
             </div>
           </div>
         </div>
@@ -463,6 +539,11 @@ const App: React.FC = () => {
             </div>
           )}
         </div>
+        {toastMessage && (
+          <div className="fixed bottom-8 right-8 z-50 animate-bounce bg-[#2c1810] text-[#DAA520] p-3 rounded-lg border-2 border-[#DAA520]">
+              {toastMessage}
+          </div>
+        )}
       </div>
     );
   }
@@ -496,8 +577,8 @@ const App: React.FC = () => {
                 <div className="absolute top-16 right-4 w-64 bg-[#e8e4d9] border-4 border-[#2c1810] shadow-xl p-4 z-50 rounded">
                   <h4 className="pixel-font text-xs font-bold mb-4 text-[#2c1810]">外观 (APPEARANCE)</h4>
                   <div className="flex gap-2 mb-4">
-                     <button onClick={() => setAppearance(p => ({...p, theme: 'sepia'}))} className="flex-1 border-2 border-[#8B4513] text-[#2c1810] text-xs font-bold p-1">羊皮纸</button>
-                     <button onClick={() => setAppearance(p => ({...p, theme: 'dark'}))} className="flex-1 bg-[#2c1810] text-[#DAA520] text-xs font-bold p-1">暗夜</button>
+                      <button onClick={() => setAppearance(p => ({...p, theme: 'sepia'}))} className="flex-1 border-2 border-[#8B4513] text-[#2c1810] text-xs font-bold p-1">羊皮纸</button>
+                      <button onClick={() => setAppearance(p => ({...p, theme: 'dark'}))} className="flex-1 bg-[#2c1810] text-[#DAA520] text-xs font-bold p-1">暗夜</button>
                   </div>
                 </div>
             )}
@@ -533,11 +614,14 @@ const App: React.FC = () => {
           )}
         </div>
 
+        {/* 🆕 Resizer: 增加透明点击区域优化拖拽体验 */}
         <div 
-           className="w-2 bg-[#2c1810] border-l border-r border-[#8B4513] cursor-col-resize hover:bg-[#DAA520] z-40 flex items-center justify-center"
+           className="w-2 bg-[#2c1810] border-l border-r border-[#8B4513] cursor-col-resize hover:bg-[#DAA520] z-40 flex items-center justify-center relative group"
            onMouseDown={startResizing}
         >
-          <GripVerticalIcon className="w-4 h-4 text-[#8B4513]" />
+          {/* 透明扩展层 */}
+          <div className="absolute inset-y-0 -left-2 -right-2 z-50 cursor-col-resize"></div>
+          <GripVerticalIcon className="w-4 h-4 text-[#8B4513] group-hover:text-[#2c1810]" />
         </div>
 
         <div className="h-full relative" style={{ width: `${100 - leftWidth}%`, backgroundColor: appearance.theme === 'sepia' ? '#F4ECD8' : '#2c1810' }}>
@@ -590,14 +674,14 @@ const App: React.FC = () => {
         
         {toastMessage && (
           <div className="absolute bottom-8 right-8 z-50 animate-bounce bg-[#2c1810] text-[#DAA520] p-3 rounded-lg border-2 border-[#DAA520]">
-             {toastMessage}
+              {toastMessage}
           </div>
         )}
 
         {(isAnalyzingCitation || citationInfo) && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="bg-[#e8e4d9] border-4 border-[#2c1810] p-4 max-w-md w-full shadow-2xl relative">
-              <button onClick={() => {setCitationInfo(null); setIsAnalyzingCitation(false)}} className="absolute top-2 right-2 font-bold">X</button>
+            <div className="bg-[#e8e4d9] border-4 border-[#2c1810] p-4 max-w-md w-full shadow-2xl relative animate-in zoom-in-95 duration-200">
+              <button onClick={() => {setCitationInfo(null); setIsAnalyzingCitation(false)}} className="absolute top-2 right-2 font-bold p-1 hover:bg-black/10 rounded">X</button>
               {isAnalyzingCitation ? <p className="p-4 text-center">正在检索古卷...</p> : (
                 <div className="space-y-2">
                    <h3 className="font-bold text-lg">{citationInfo?.title}</h3>
@@ -610,7 +694,7 @@ const App: React.FC = () => {
         )}
 
         {(isAnalyzingEquation || equationExplanation) && (
-          <div className="absolute bottom-0 w-full bg-[#2c1810] border-t-4 border-[#DAA520] p-4 text-[#e8e4d9] z-50 max-h-40 overflow-y-auto">
+          <div className="absolute bottom-0 w-full bg-[#2c1810] border-t-4 border-[#DAA520] p-4 text-[#e8e4d9] z-50 max-h-40 overflow-y-auto animate-in slide-in-from-bottom duration-300">
              <div className="flex justify-between mb-2">
                <span className="font-bold text-[#DAA520] pixel-font">Magic Lens</span>
                <button onClick={() => {setEquationExplanation(null); setIsAnalyzingEquation(false)}}>X</button>
