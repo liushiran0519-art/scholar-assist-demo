@@ -12,6 +12,7 @@ import ChatInterface from './components/ChatInterface';
 import TranslationViewer from './components/TranslationViewer';
 import PDFViewer from './components/PDFViewer';
 import { ScholarCatMascot, CatMood } from './components/ScholarCatMascot';
+import { CursorSystem } from './components/CursorSystem'; // ✅ 引入光标系统
 import { UploadIcon, BookOpenIcon, XIcon, SettingsIcon, GripVerticalIcon, StarIcon } from './components/IconComponents';
 
 const App: React.FC = () => {
@@ -19,6 +20,8 @@ const App: React.FC = () => {
   const [file, setFile] = useState<PaperFile | null>(null);
   const [fileFingerprint, setFileFingerprint] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<SidebarTab | 'DUAL'>('DUAL');
+  
+  // ✅ 新增：AI 模型选择状态
   const [aiModel, setAiModel] = useState<'gemini' | 'deepseek'>('gemini');
   
   // History State
@@ -28,9 +31,9 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [debouncedPage, setDebouncedPage] = useState(1);
   const [highlightText, setHighlightText] = useState<string | null>(null);
-  const [pdfSelectedText, setPdfSelectedText] = useState<string | null>(null); // 新增：PDF 选中的文本
+  const [pdfSelectedText, setPdfSelectedText] = useState<string | null>(null);
 
-  // Layout State (持久化)
+  // ✅ 优化：Layout State (持久化)
   const [leftWidth, setLeftWidth] = useState(() => {
     const saved = localStorage.getItem('scholar_layout_width');
     return saved ? parseFloat(saved) : 50;
@@ -38,7 +41,7 @@ const App: React.FC = () => {
   const isResizing = useRef(false);
   const pdfContainerRef = useRef<HTMLDivElement>(null);
 
-  // Settings (持久化)
+  // ✅ 优化：Settings (持久化)
   const [showSettings, setShowSettings] = useState(false);
   const [appearance, setAppearance] = useState<AppearanceSettings>(() => {
     const saved = localStorage.getItem('scholar_appearance');
@@ -76,7 +79,6 @@ const App: React.FC = () => {
 
   const loadHistoryList = async () => {
     const list = await getAllHistory();
-    // 按时间倒序
     setHistoryList(list.reverse());
   };
 
@@ -198,7 +200,6 @@ const App: React.FC = () => {
   // --- 🆕 7. Hotkeys (Keyboard Support) ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 忽略输入框内的按键
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
 
       switch (e.key) {
@@ -209,7 +210,6 @@ const App: React.FC = () => {
           break;
         case 'ArrowRight':
           if (mode === AppMode.READING) {
-             // 简单的翻页逻辑，react-pdf 会处理边界
              setCurrentPage(p => p + 1); 
           }
           break;
@@ -228,7 +228,7 @@ const App: React.FC = () => {
 
   // --- File Handling (Upload & Drop) ---
   
-  // 提取通用的文件处理逻辑
+  // ✅ 抽离通用的文件处理逻辑
   const processUploadedFile = async (selectedFile: File) => {
     const base64Data = await fileToBase64(selectedFile);
     const fingerprint = await generateFingerprint(selectedFile, selectedFile.name, selectedFile.lastModified);
@@ -263,9 +263,7 @@ const App: React.FC = () => {
         setFullText(textContent);
         
         await saveFileToHistory(fingerprint, newFile, textContent);
-
         const newSummary = await generatePaperSummary(textContent);
-        
         await saveFileToHistory(fingerprint, newFile, textContent, newSummary);
         
         setSummary(newSummary);
@@ -291,7 +289,7 @@ const App: React.FC = () => {
     }
   };
 
-  // 🆕 拖拽上传处理
+  // ✅ 拖拽上传处理
   const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -331,7 +329,6 @@ const App: React.FC = () => {
       setMode(AppMode.READING);
       setPageTranslations(new Map());
       
-      // 更新最后阅读时间
       await saveFileToHistory(fingerprint, restoredFile, record.fullText, record.summary);
     } catch (e) {
       console.error("Failed to open from history", e);
@@ -347,7 +344,6 @@ const App: React.FC = () => {
       loadHistoryList(); 
     }
   };
-
   
   const retrySummary = async () => {
     if (!file) return;
@@ -420,6 +416,7 @@ const App: React.FC = () => {
     try {
       let answer = '';
       const context = fullText || "No context available."; 
+      // ✅ 使用当前选择的 AI 模型
       if (aiModel === 'deepseek') {
         answer = await chatWithDeepSeek(text) || "Error";
       } else {
@@ -438,7 +435,6 @@ const App: React.FC = () => {
     if (file && fileFingerprint) {
         await saveFileToHistory(fileFingerprint, file, fullText, summary);
     }
-    
     await clearActiveSession(); 
     setFile(null);
     setFileFingerprint(null);
@@ -476,9 +472,12 @@ const App: React.FC = () => {
     return (
        <div 
         className="min-h-screen bg-[#2c1810] flex flex-col items-center p-4 relative overflow-hidden"
-        onDrop={handleDrop}
+        onDrop={handleDrop} // ✅ 绑定拖拽
         onDragOver={handleDragOver}
        >
+        {/* ✅ 插入光标系统 */}
+        <CursorSystem />
+
         <div className="max-w-4xl w-full text-center space-y-4 animate-in fade-in duration-700 relative z-10 mt-10">
           <div>
               <div className="bg-[#8B4513] w-16 h-16 mx-auto flex items-center justify-center mb-4 rpg-border shadow-[4px_4px_0_0_#1a0f0a]">
@@ -529,7 +528,6 @@ const App: React.FC = () => {
                          <XIcon className="w-4 h-4" />
                        </button>
                     </div>
-                    
                     <div className="text-[10px] text-[#DAA520]/80 space-y-1 mt-2">
                        <p>📅 {new Date(item.lastOpenedAt).toLocaleDateString()}</p>
                        <p>🏷️ {item.summary?.title ? "已解析" : "未解析"}</p>
@@ -551,6 +549,10 @@ const App: React.FC = () => {
   // --- RENDER: READING MODE ---
   return (
     <div className={`flex flex-col h-screen overflow-hidden font-sans ${appearance.theme === 'sepia' ? 'bg-[#F4ECD8]' : 'bg-[#2c1810]'}`}>
+      
+      {/* ✅ 插入光标系统 */}
+      <CursorSystem />
+
       <div className={`h-16 border-b-4 flex items-center px-4 justify-between shrink-0 shadow-lg z-50 ${appearance.theme === 'sepia' ? 'bg-[#e8e4d9] border-[#8B4513]' : 'bg-[#2c1810] border-[#8B4513]'}`}>
          <div className="flex items-center gap-3">
            <div className="bg-[#DAA520] p-1 border-2 border-[#e8e4d9]">
@@ -571,17 +573,103 @@ const App: React.FC = () => {
              </button>
             ))}
 
-            <button onClick={() => setShowSettings(!showSettings)} className="p-2 border-2 border-[#DAA520] text-[#DAA520]"><SettingsIcon className="w-5 h-5"/></button>
+            {/* ✅ 升级版：魔法配置台 (Settings Panel) */}
+            <div className="relative">
+              <button 
+                onClick={() => setShowSettings(!showSettings)} 
+                className={`p-2 border-2 transition-all ${showSettings ? 'bg-[#DAA520] text-[#2c1810] border-[#2c1810]' : 'border-[#DAA520] text-[#DAA520] hover:bg-[#DAA520]/10'}`}
+                title="系统设置"
+              >
+                <SettingsIcon className="w-5 h-5"/>
+              </button>
             
-            {showSettings && (
-                <div className="absolute top-16 right-4 w-64 bg-[#e8e4d9] border-4 border-[#2c1810] shadow-xl p-4 z-50 rounded">
-                  <h4 className="pixel-font text-xs font-bold mb-4 text-[#2c1810]">外观 (APPEARANCE)</h4>
-                  <div className="flex gap-2 mb-4">
-                      <button onClick={() => setAppearance(p => ({...p, theme: 'sepia'}))} className="flex-1 border-2 border-[#8B4513] text-[#2c1810] text-xs font-bold p-1">羊皮纸</button>
-                      <button onClick={() => setAppearance(p => ({...p, theme: 'dark'}))} className="flex-1 bg-[#2c1810] text-[#DAA520] text-xs font-bold p-1">暗夜</button>
+              {showSettings && (
+                <>
+                  {/* 点击外部关闭 */}
+                  <div className="fixed inset-0 z-40 cursor-default" onClick={() => setShowSettings(false)}></div>
+
+                  <div className="absolute top-14 right-0 w-72 bg-[#e8e4d9] border-4 border-[#2c1810] shadow-[8px_8px_0_0_rgba(0,0,0,0.5)] p-5 z-50 rounded-sm animate-in zoom-in-95 duration-200 select-none">
+                    
+                    {/* Header */}
+                    <div className="flex items-center gap-2 mb-4 border-b-2 border-[#8B4513]/20 pb-2">
+                       <span className="text-lg">🛠️</span>
+                       <h4 className="pixel-font text-xs font-bold text-[#2c1810] uppercase tracking-wider">Configuration</h4>
+                    </div>
+
+                    <div className="space-y-5">
+                      {/* Theme Control */}
+                      <div>
+                        <label className="text-[10px] font-bold text-[#8B4513] mb-2 block pixel-font">VISUAL THEME (视觉风格)</label>
+                        <div className="flex gap-2">
+                            <button 
+                              onClick={() => setAppearance(p => ({...p, theme: 'sepia'}))} 
+                              className={`flex-1 py-2 text-xs font-bold border-2 transition-all flex items-center justify-center gap-2 ${appearance.theme === 'sepia' ? 'bg-[#DAA520] text-[#2c1810] border-[#2c1810] shadow-inner' : 'bg-[#f4ecd8] text-[#5c4033] border-[#8B4513]'}`}
+                            >
+                              <div className="w-3 h-3 rounded-full bg-[#f4ecd8] border border-[#5c4033]"></div>
+                              Sepia
+                            </button>
+                            <button 
+                              onClick={() => setAppearance(p => ({...p, theme: 'dark'}))} 
+                              className={`flex-1 py-2 text-xs font-bold border-2 transition-all flex items-center justify-center gap-2 ${appearance.theme === 'dark' ? 'bg-[#DAA520] text-[#2c1810] border-[#2c1810] shadow-inner' : 'bg-[#2c1810] text-[#DAA520] border-[#DAA520]'}`}
+                            >
+                              <div className="w-3 h-3 rounded-full bg-[#2c1810] border border-[#DAA520]"></div>
+                              Dark
+                            </button>
+                        </div>
+                      </div>
+
+                      {/* Font Size Control */}
+                      <div>
+                        <label className="text-[10px] font-bold text-[#8B4513] mb-2 block pixel-font">RUNE SIZE (符文大小)</label>
+                        <div className="flex items-center border-2 border-[#8B4513] bg-[#fffef0] rounded overflow-hidden">
+                           <button 
+                             onClick={() => setAppearance(p => ({...p, fontSize: Math.max(12, p.fontSize - 1)}))}
+                             className="px-3 py-1 hover:bg-[#DAA520] hover:text-[#2c1810] text-[#8B4513] font-bold border-r border-[#8B4513]"
+                           >-</button>
+                           <span className="flex-1 text-center text-xs font-serif text-[#2c1810]">{appearance.fontSize}px</span>
+                           <button 
+                             onClick={() => setAppearance(p => ({...p, fontSize: Math.min(24, p.fontSize + 1)}))}
+                             className="px-3 py-1 hover:bg-[#DAA520] hover:text-[#2c1810] text-[#8B4513] font-bold border-l border-[#8B4513]"
+                           >+</button>
+                        </div>
+                      </div>
+
+                      {/* AI Model Switcher */}
+                      <div>
+                        <label className="text-[10px] font-bold text-[#8B4513] mb-2 block pixel-font">MAGIC SOURCE (魔力来源)</label>
+                        <div className="flex flex-col gap-2">
+                           <label className="flex items-center gap-2 cursor-pointer group">
+                              <div className={`w-4 h-4 border-2 flex items-center justify-center ${aiModel === 'gemini' ? 'border-[#DAA520] bg-[#2c1810]' : 'border-[#8B4513] bg-transparent'}`}>
+                                 {aiModel === 'gemini' && <div className="w-2 h-2 bg-[#DAA520]"></div>}
+                              </div>
+                              <input type="radio" className="hidden" name="model" checked={aiModel === 'gemini'} onChange={() => setAiModel('gemini')} />
+                              <div className="flex flex-col">
+                                <span className={`text-xs font-bold ${aiModel === 'gemini' ? 'text-[#2c1810]' : 'text-[#5c4033]'}`}>Gemini 2.0 Flash</span>
+                                <span className="text-[9px] opacity-60 text-[#5c4033]">速度快，适合长文翻译</span>
+                              </div>
+                           </label>
+                           
+                           <label className="flex items-center gap-2 cursor-pointer group">
+                              <div className={`w-4 h-4 border-2 flex items-center justify-center ${aiModel === 'deepseek' ? 'border-[#DAA520] bg-[#2c1810]' : 'border-[#8B4513] bg-transparent'}`}>
+                                 {aiModel === 'deepseek' && <div className="w-2 h-2 bg-[#DAA520]"></div>}
+                              </div>
+                              <input type="radio" className="hidden" name="model" checked={aiModel === 'deepseek'} onChange={() => setAiModel('deepseek')} />
+                              <div className="flex flex-col">
+                                <span className={`text-xs font-bold ${aiModel === 'deepseek' ? 'text-[#2c1810]' : 'text-[#5c4033]'}`}>DeepSeek V3</span>
+                                <span className="text-[9px] opacity-60 text-[#5c4033]">逻辑强，适合深度问答</span>
+                              </div>
+                           </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 pt-2 border-t-2 border-[#8B4513]/10 text-center">
+                       <span className="text-[9px] text-[#8B4513]/40 pixel-font">SCHOLAR SCROLL v1.0</span>
+                    </div>
                   </div>
-                </div>
-            )}
+                </>
+              )}
+            </div>
 
             <button 
               onClick={goBackToBookshelf} 
@@ -607,14 +695,14 @@ const App: React.FC = () => {
                pageNumber={currentPage}
                onPageChange={setCurrentPage}
                onPageRendered={() => {}} 
-               highlightText={highlightText} // 接收：来自 Translation 的高亮请求
+               highlightText={highlightText} 
                onTextSelected={handleContextSelection}
-               onTextHover={setPdfSelectedText} // 发送：通知 Translation 进行高亮
+               onTextHover={setPdfSelectedText} 
              />
           )}
         </div>
 
-        {/* 🆕 Resizer: 增加透明点击区域优化拖拽体验 */}
+        {/* ✅ 优化：拖拽条 (更大的点击判定区) */}
         <div 
            className="w-2 bg-[#2c1810] border-l border-r border-[#8B4513] cursor-col-resize hover:bg-[#DAA520] z-40 flex items-center justify-center relative group"
            onMouseDown={startResizing}
@@ -630,8 +718,8 @@ const App: React.FC = () => {
                <TranslationViewer 
                translation={pageTranslations.get(debouncedPage)}
                isLoading={isTranslatingPage}
-               onHoverBlock={setHighlightText} // 发送：通知 PDF 高亮
-               highlightText={pdfSelectedText} // 接收：来自 PDF 的选中/悬停文字
+               onHoverBlock={setHighlightText} 
+               highlightText={pdfSelectedText} 
                onRetry={async () => {
                    setPageTranslations(prev => {
                        const newMap = new Map(prev);
