@@ -34,7 +34,7 @@ async function callProxyApi(messages: any[], jsonMode = false) {
   }
 
   try {
-    const response = await fetch(`${BASE_URL}/chat/completions`, {
+    const response = await fetch('/api/proxy', {
       method: "POST",
       headers: headers,
       body: JSON.stringify(body)
