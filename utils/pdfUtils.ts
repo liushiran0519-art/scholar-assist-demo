@@ -1,44 +1,55 @@
 import * as pdfjsLib from 'pdfjs-dist';
 
-// 设置 worker (如果你用的是 react-pdf，通常不需要这一步，或者指向 public 下的 worker)
-// pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+// Ensure worker is set. 
+// Note: In a real Vite app, you might handle worker loading differently, 
+// but setting it globally here ensures the utility function works.
+if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@4.4.168/build/pdf.worker.min.mjs`;
+}
 
-/**
- * 从 PDF Base64 中提取所有页面的纯文本
- */
+export const fileToBase64 = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => {
+      const result = reader.result as string;
+      // Remove data:application/pdf;base64, prefix
+      const base64 = result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = error => reject(error);
+  });
+};
+
 export const extractTextFromPdf = async (base64Data: string): Promise<string> => {
   try {
-    // 1. 去掉 data:application/pdf;base64, 前缀
-    const cleanBase64 = base64Data.replace(/^data:application\/pdf;base64,/, "");
-    
-    // 2. 将 Base64 解码为二进制数据
-    const binaryString = window.atob(cleanBase64);
+    // Decode base64 to binary
+    const binaryString = window.atob(base64Data);
     const len = binaryString.length;
     const bytes = new Uint8Array(len);
     for (let i = 0; i < len; i++) {
       bytes[i] = binaryString.charCodeAt(i);
     }
 
-    // 3. 加载 PDF 文档
+    // Load document
     const loadingTask = pdfjsLib.getDocument({ data: bytes });
     const pdf = await loadingTask.promise;
-
-    let fullText = "";
-
-    // 4. 循环遍历每一页提取文字
-    // 为了防止太慢，可以限制只读前 20 页 (一般论文也就这么长)
-    const maxPages = Math.min(pdf.numPages, 20); 
     
+    let fullText = '';
+    const maxPages = Math.min(pdf.numPages, 10); // Limit to first 10 pages for summary to save tokens/time if needed
+
     for (let i = 1; i <= maxPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(" ");
+      const pageText = textContent.items
+        .map((item: any) => item.str)
+        .join(' ');
       fullText += `--- Page ${i} ---\n${pageText}\n\n`;
     }
 
     return fullText;
   } catch (error) {
-    console.error("PDF 文本提取失败:", error);
-    throw new Error("无法读取 PDF 内容，请确保文件未加密");
+    console.error("PDF Text Extraction Error:", error);
+    throw new Error("Failed to extract text from PDF");
   }
 };
