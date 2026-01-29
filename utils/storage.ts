@@ -2,23 +2,21 @@ import { openDB, DBSchema, IDBPDatabase } from 'idb';
 import { PaperSummary, PageTranslation, PaperFile } from '../types';
 
 interface ScholarDB extends DBSchema {
-  // 1. 文件元数据与内容存储 (书架核心)
   files: {
     key: string; // fingerprint
     value: {
       fingerprint: string;
-      name: string; // 文件名
-      fileData: PaperFile; // 存储完整的 PDF 数据 (Base64)
-      summary: PaperSummary | null; // 摘要可能还没生成
-      fullText?: string; // 提取的纯文本
+      name: string;
+      fileData: PaperFile;
+      summary: PaperSummary | null;
+      fullText?: string;
       createdAt: number;
-      lastOpenedAt: number; // 用于排序最近阅读
+      lastOpenedAt: number;
     };
     indexes: { 'by-date': number };
   };
-  // 2. 翻译缓存
   translations: {
-    key: string; // fingerprint_pageNum
+    key: string;
     value: {
       id: string;
       fingerprint: string;
@@ -28,9 +26,8 @@ interface ScholarDB extends DBSchema {
     };
     indexes: { 'by-fingerprint': string };
   };
-  // 3. 当前会话 (用于刷新页面恢复)
   session: {
-    key: string; 
+    key: string;
     value: {
       id: string;
       fingerprint: string;
@@ -40,25 +37,40 @@ interface ScholarDB extends DBSchema {
 }
 
 const DB_NAME = 'ScholarScrollDB';
-const DB_VERSION = 3; // ⬆️ 版本号升级
+const DB_VERSION = 4; // ⬆️ 版本升级，确保触发 upgrade 修复索引
 
 let dbPromise: Promise<IDBPDatabase<ScholarDB>> | null = null;
 
 const getDB = () => {
   if (!dbPromise) {
     dbPromise = openDB<ScholarDB>(DB_NAME, DB_VERSION, {
-      upgrade(db, oldVersion, newVersion) {
-        // 创建文件存储
+      upgrade(db, oldVersion, newVersion, transaction) {
+        // --- 1. Files Store (修复索引缺失问题) ---
+        let fileStore;
         if (!db.objectStoreNames.contains('files')) {
-          const store = db.createObjectStore('files', { keyPath: 'fingerprint' });
-          store.createIndex('by-date', 'lastOpenedAt');
+          fileStore = db.createObjectStore('files', { keyPath: 'fingerprint' });
+        } else {
+          fileStore = transaction.objectStore('files');
         }
-        // 创建翻译存储
+        
+        // 关键修复：独立检查索引是否存在
+        if (!fileStore.indexNames.contains('by-date')) {
+          fileStore.createIndex('by-date', 'lastOpenedAt');
+        }
+
+        // --- 2. Translations Store ---
+        let transStore;
         if (!db.objectStoreNames.contains('translations')) {
-          const store = db.createObjectStore('translations', { keyPath: 'id' });
-          store.createIndex('by-fingerprint', 'fingerprint');
+          transStore = db.createObjectStore('translations', { keyPath: 'id' });
+        } else {
+          transStore = transaction.objectStore('translations');
         }
-        // 创建会话存储
+
+        if (!transStore.indexNames.contains('by-fingerprint')) {
+          transStore.createIndex('by-fingerprint', 'fingerprint');
+        }
+
+        // --- 3. Session Store ---
         if (!db.objectStoreNames.contains('session')) {
           db.createObjectStore('session', { keyPath: 'id' });
         }
@@ -68,41 +80,49 @@ const getDB = () => {
   return dbPromise;
 };
 
-// --- History / Bookshelf Operations (报错就是因为缺了这一块) ---
+// --- History / Bookshelf Operations ---
 
-// 1. 保存或更新文件到历史记录
 export const saveFileToHistory = async (fingerprint: string, file: PaperFile, fullText?: string, summary?: PaperSummary) => {
   const db = await getDB();
+  // 先获取旧数据，防止覆盖掉已有的 summary 或 fullText
   const existing = await db.get('files', fingerprint);
   
   await db.put('files', {
     fingerprint,
     name: file.name,
     fileData: file,
-    summary: summary || (existing ? existing.summary : null), 
-    fullText: fullText || (existing ? existing.fullText : undefined),
+    // 如果传入了新摘要就用新的，否则沿用旧的，都没有则为 null
+    summary: summary !== undefined ? summary : (existing ? existing.summary : null),
+    // 如果传入了全文就用新的，否则沿用旧的
+    fullText: fullText !== undefined ? fullText : (existing ? existing.fullText : undefined),
     createdAt: existing ? existing.createdAt : Date.now(),
-    lastOpenedAt: Date.now()
+    lastOpenedAt: Date.now() // 更新打开时间，用于排序
   });
 };
 
-// 2. 获取所有历史记录（用于书架列表） -> ✅ App.tsx 需要这个
 export const getAllHistory = async () => {
   const db = await getDB();
-  return db.getAllFromIndex('files', 'by-date');
+  try {
+    // 尝试使用索引获取（已排序）
+    return await db.getAllFromIndex('files', 'by-date');
+  } catch (e) {
+    console.warn("索引读取失败，降级为普通读取", e);
+    // 兜底：如果索引有问题，直接读取所有数据并在内存排序
+    const all = await db.getAll('files');
+    return all.sort((a, b) => a.lastOpenedAt - b.lastOpenedAt);
+  }
 };
 
-// 3. 获取单个文件详情（用于打开）
 export const getFileFromHistory = async (fingerprint: string) => {
   const db = await getDB();
   return db.get('files', fingerprint);
 };
 
-// 4. 删除历史记录
 export const deleteFromHistory = async (fingerprint: string) => {
   const db = await getDB();
   await db.delete('files', fingerprint);
-  // 同时清理相关的翻译缓存，释放空间
+  
+  // 级联删除相关的翻译缓存
   const tx = db.transaction('translations', 'readwrite');
   const index = tx.store.index('by-fingerprint');
   let cursor = await index.openCursor(IDBKeyRange.only(fingerprint));
@@ -113,7 +133,6 @@ export const deleteFromHistory = async (fingerprint: string) => {
   await tx.done;
 };
 
-// 5. 单独更新摘要（修复重试功能） -> ✅ App.tsx 需要这个
 export const updateSummaryInHistory = async (fingerprint: string, summary: PaperSummary) => {
   const db = await getDB();
   const record = await db.get('files', fingerprint);
@@ -123,7 +142,8 @@ export const updateSummaryInHistory = async (fingerprint: string, summary: Paper
   }
 };
 
-// --- Translation Operations (Unchanged) ---
+// --- Translation Operations ---
+
 export const savePageTranslation = async (fingerprint: string, pageNumber: number, data: PageTranslation) => {
   const db = await getDB();
   const id = `${fingerprint}_${pageNumber}`;
@@ -141,7 +161,8 @@ export const deletePageTranslation = async (fingerprint: string, pageNumber: num
   await db.delete('translations', `${fingerprint}_${pageNumber}`);
 };
 
-// --- Session Operations (Unchanged) ---
+// --- Session Operations ---
+
 export const saveActiveSession = async (fingerprint: string, currentPage: number) => {
   const db = await getDB();
   await db.put('session', { id: 'current_file', fingerprint, currentPage });
