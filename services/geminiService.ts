@@ -102,7 +102,8 @@ async function callProxyApi(messages: any[], jsonMode = false) {
 // ================= 核心业务函数 =================
 
 export const generatePaperSummary = async (fullText: string): Promise<PaperSummary> => {
-  const truncatedText = fullText.slice(0, 30000);
+  // 🔽 修复 2：限制输入长度为 20k 字符，防止 API 报错或超时
+  const truncatedText = fullText.slice(0, 20000);
 
   const prompt = `
     Role: You are the pixel library guardian "Scholar Cat" (学术猫).
@@ -132,10 +133,11 @@ export const generatePaperSummary = async (fullText: string): Promise<PaperSumma
     return JSON.parse(cleanJson(responseText)) as PaperSummary;
   } catch (error) {
     console.error("Summary generation failed:", error);
+    // 返回带有 ERROR tag 的对象，以便 UI 显示重试按钮
     return {
       title: "解读中断",
-      tags: ["系统维护中"],
-      tldr: { painPoint: "连接不稳定", solution: "请重试", effect: "暂无数据" },
+      tags: ["ERROR"], 
+      tldr: { painPoint: "连接不稳定或文本过长", solution: "请点击下方重试", effect: "暂无数据" },
       methodology: [],
       takeaways: []
     };
@@ -151,25 +153,36 @@ export const translatePageContent = async (pageText: string): Promise<PageTransl
      };
   }
 
+  // 🔽 修复 4：Prompt 增加类型识别
   const prompt = `
     Task: Translate this academic paper page into Chinese.
     
     CRITICAL INSTRUCTION: 
-    Break down the text into logical semantic blocks (paragraphs, section headers). 
-    For each block, you MUST provide:
-    1. "en": The EXACT first 15-20 words of the original English text (used for search/highlighting).
-    2. "cn": The high-quality academic Chinese translation.
-    3. "type": "paragraph" or "heading".
+    Break down the text into logical semantic blocks.
+    Assign a "type" to each block from this list:
+    - "title": Paper title (usually at the top of page 1).
+    - "authors": List of author names/affiliations.
+    - "abstract": The abstract section.
+    - "heading": Section headers (e.g., "1. Introduction").
+    - "equation": Math formulas (keep 'en' as original Latex/text, 'cn' as explanation).
+    - "reference": Bibliography items.
+    - "figure": Figure captions.
+    - "paragraph": Normal body text.
+
+    For each block provide:
+    1. "en": The EXACT first 15-20 alphanumeric characters of the text (for search).
+    2. "cn": High-quality academic Chinese translation.
+    3. "type": One of the types above.
 
     Input Text:
     """
-    ${pageText.slice(0, 10000)}
+    ${pageText.slice(0, 8000)} 
     """
 
     Return strict JSON:
     {
       "blocks": [
-        { "type": "paragraph", "en": "start of the english sentence...", "cn": "中文翻译..." }
+        { "type": "paragraph", "en": "start...", "cn": "..." }
       ],
       "glossary": [
         { "term": "Term", "definition": "Definition" }
@@ -179,8 +192,7 @@ export const translatePageContent = async (pageText: string): Promise<PageTransl
 
   try {
     const responseText = await callProxyApi([{ role: "user", content: prompt }], true);
-    // 这里假设你已经有了 cleanAndParseJson 函数，如果没有请保留原有的 JSON.parse 逻辑
-    const data = JSON.parse(responseText.replace(/```json/g, '').replace(/```/g, '')); 
+    const data = JSON.parse(cleanJson(responseText)); 
     
     return {
       pageNumber: 0,
