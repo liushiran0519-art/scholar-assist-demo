@@ -1,5 +1,9 @@
 import React, { useState, useEffect, useRef, forwardRef } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
+// ✅ 关键修复 1: 必须引入这两个官方 CSS，否则文字层会乱跑，无法对齐
+import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
+import 'react-pdf/dist/esm/Page/TextLayer.css';
+
 import { ChevronLeftIcon, ChevronRightIcon, ZoomInIcon, ZoomOutIcon, LoaderIcon, InfoIcon, StarIcon } from './IconComponents';
 
 // 配置 Worker
@@ -62,13 +66,12 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
 
   useEffect(() => {
     if ((triggerCapture || 0) > 0) {
-      const timer = setTimeout(() => {
-        captureCanvas();
-      }, 500);
+      const timer = setTimeout(captureCanvas, 500);
       return () => clearTimeout(timer);
     }
   }, [triggerCapture, pageNumber]);
 
+  // 重置状态
   useEffect(() => {
     setTextLayerReady(false);
     setHighlights([]);
@@ -76,8 +79,9 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
   }, [pageNumber, scale]);
 
 
-  // --- 🌟 核心优化：高亮与自动滚动逻辑 🌟 ---
+  // --- 🌟 核心逻辑：计算高亮区域 ---
   useEffect(() => {
+    // 只有当文字层渲染完毕（textLayerReady）后，getClientRects 才能拿到正确的坐标
     if (!highlightText || highlightText.length < 2 || !textLayerReady || !pageContainerRef.current) {
       setHighlights([]);
       return;
@@ -97,7 +101,7 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
       
       if (textNodes.length === 0) return;
 
-      // 2. 建立映射表：NormalizedString Index -> DOM Node & Offset
+      // 2. 建立映射表
       let normalizedPdfText = "";
       const mapping: { node: Text; index: number }[] = [];
 
@@ -105,7 +109,7 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         const str = txtNode.textContent || "";
         for (let i = 0; i < str.length; i++) {
            const char = str[i];
-           // 只匹配字母、数字、中文，忽略干扰字符
+           // 只匹配有效字符，忽略不可见的控制符
            if (/[a-zA-Z0-9\u4e00-\u9fa5]/.test(char)) {
              normalizedPdfText += char.toLowerCase();
              mapping.push({ node: txtNode, index: i });
@@ -113,16 +117,15 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         }
       }
 
-      // 3. 处理查询词
+      // 3. 搜索匹配
       const cleanQuery = highlightText.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '').toLowerCase();
       const searchKey = cleanQuery.slice(0, 50); // 取前50个字符作为锚点
 
       if (searchKey.length < 2) return;
 
-      // 4. 搜索
       let startIndex = normalizedPdfText.indexOf(searchKey);
       
-      // 容错：如果找不到，尝试跳过前5个字符（防止首字母识别错误）
+      // 容错匹配
       if (startIndex === -1 && searchKey.length > 10) {
          startIndex = normalizedPdfText.indexOf(searchKey.slice(5)); 
       }
@@ -132,17 +135,17 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         return;
       }
 
-      // 5. 确定范围
+      // 4. 计算坐标
       const endIndex = Math.min(startIndex + searchKey.length - 1, mapping.length - 1);
       const startData = mapping[startIndex];
       const endData = mapping[endIndex];
 
-      // 6. 获取坐标
       const range = document.createRange();
       try {
         range.setStart(startData.node, startData.index);
         range.setEnd(endData.node, endData.index + 1);
         
+        // 关键：此时 TextLayer 必须已经通过 CSS 正确对齐，getClientRects 才会返回相对于视口的正确位置
         const rects = range.getClientRects();
         const pageElement = pageContainerRef.current?.querySelector('.react-pdf__Page');
         const pageRect = pageElement?.getBoundingClientRect();
@@ -154,6 +157,7 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
           const r = rects[i];
           if (r.width < 1 || r.height < 1) continue;
           
+          // 转换为相对于 Page 的坐标
           newHighlights.push({
             left: r.left - pageRect.left,
             top: r.top - pageRect.top,
@@ -163,7 +167,7 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         }
         setHighlights(newHighlights);
 
-        // 7. 自动滚动 (这是之前缺少的关键体验)
+        // 自动滚动到高亮位置
         if (newHighlights.length > 0) {
            const firstRect = newHighlights[0];
            if (pageContainerRef.current) {
@@ -181,13 +185,14 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
       }
     };
 
-    const timer = setTimeout(calculateHighlights, 50);
+    // 稍微延迟一下，确保 DOM 布局稳定
+    const timer = setTimeout(calculateHighlights, 100);
     return () => clearTimeout(timer);
 
   }, [highlightText, textLayerReady, pageNumber, scale]);
 
 
-  // --- 鼠标划词菜单逻辑 ---
+  // --- 鼠标交互逻辑 (不变) ---
   useEffect(() => {
     const handleMouseUp = () => {
       const selection = window.getSelection();
@@ -212,7 +217,6 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
     return () => document.removeEventListener('mouseup', handleMouseUp);
   }, []);
 
-  // --- 鼠标悬停传递文本 (用于联动) ---
   useEffect(() => {
     if (!onTextHover || !textLayerReady) return;
     const container = pageContainerRef.current;
@@ -242,15 +246,14 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
 
   return (
     <div className="flex flex-col h-full bg-[#5c4033] relative">
+      {/* ✅ 关键修复 2: 移除了之前强制 width: 100% 和 position 的 style 注入 */}
+      {/* react-pdf 的 CSS 会自动处理定位，我们只需要微调选中文本的颜色 */}
       <style>{`
-        .react-pdf__Page { position: relative; display: block; }
-        .react-pdf__Page__textContent {
-          position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important;
-          color: transparent !important; background: transparent !important; opacity: 1 !important;
-          pointer-events: all; line-height: 1; user-select: text; z-index: 10;
+        /* 仅微调选中样式，不要覆盖核心定位属性 */
+        .react-pdf__Page__textContent ::selection {
+          background: rgba(218, 165, 32, 0.3);
         }
-        .react-pdf__Page__textContent ::selection { background: rgba(218, 165, 32, 0.2); color: transparent; }
-        .react-pdf__Page__textContent span { color: transparent !important; cursor: text; }
+        /* 确保高亮层动画顺滑 */
         .highlight-overlay { transition: all 0.2s ease; }
       `}</style>
 
@@ -259,14 +262,14 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         <div className="flex items-center gap-4">
           <div className="flex items-center bg-[#2c1810] border-2 border-[#8B4513] p-1 rounded">
             <button onClick={() => onPageChange(pageNumber - 1)} disabled={pageNumber <= 1} className="p-1 hover:bg-[#8B4513] disabled:opacity-30 rounded"><ChevronLeftIcon className="w-4 h-4" /></button>
-            <span className="mx-3 min-w-[60px] text-center font-bold text-xs pixel-font">{numPages ? `${pageNumber}/${numPages}` : '--'}</span>
+            <span className="mx-3 min-w-[60px] text-center font-bold text-xs pixel-font">{numPages ? `${pageNumber} / ${numPages}` : '--'}</span>
             <button onClick={() => onPageChange(pageNumber + 1)} disabled={pageNumber >= (numPages || 0)} className="p-1 hover:bg-[#8B4513] disabled:opacity-30 rounded"><ChevronRightIcon className="w-4 h-4" /></button>
           </div>
         </div>
         <div className="flex items-center bg-[#2c1810] border-2 border-[#8B4513] p-1 rounded">
            <button onClick={() => changeScale(-0.1)} className="p-1 hover:bg-[#8B4513] rounded"><ZoomOutIcon className="w-4 h-4" /></button>
-            <span className="mx-2 min-w-[40px] text-center font-bold text-xs pixel-font">{Math.round(scale * 100)}%</span>
-            <button onClick={() => changeScale(0.1)} className="p-1 hover:bg-[#8B4513] rounded"><ZoomInIcon className="w-4 h-4" /></button>
+           <span className="mx-2 min-w-[40px] text-center font-bold text-xs pixel-font">{Math.round(scale * 100)}%</span>
+           <button onClick={() => changeScale(0.1)} className="p-1 hover:bg-[#8B4513] rounded"><ZoomInIcon className="w-4 h-4" /></button>
         </div>
       </div>
 
@@ -281,43 +284,43 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
       >
         <div className="relative h-fit shadow-2xl border-4 border-[#2c1810] bg-white">
            <Document
-              file={fileUrl}
-              onLoadSuccess={onDocumentLoadSuccess}
-              loading={<div className="flex items-center justify-center h-96 w-full text-[#DAA520]"><LoaderIcon className="w-8 h-8 animate-spin" /></div>}
-              error={<div className="text-red-500 p-4">Error loading Scroll</div>}
-            >
-              <Page 
-                pageNumber={pageNumber} 
-                scale={scale}
-                renderTextLayer={true} 
-                renderAnnotationLayer={false} 
-                className="bg-white shadow-lg relative"
-                onRenderSuccess={() => setTimeout(captureCanvas, 300)}
-                onGetTextSuccess={() => setTextLayerReady(true)}
-              />
-              
-              {/* Highlight Overlay Layer */}
-              <div className="absolute inset-0 pointer-events-none z-20">
-                {highlights.map((h, i) => (
-                  <div
-                    key={i}
-                    className="highlight-overlay absolute bg-[#DAA520] mix-blend-multiply opacity-40 border-b-2 border-[#8B4513] shadow-[0_0_8px_rgba(218,165,32,0.8)]"
-                    style={{ left: h.left, top: h.top, width: h.width, height: h.height }}
-                  />
-                ))}
-              </div>
-            </Document>
+             file={fileUrl}
+             onLoadSuccess={onDocumentLoadSuccess}
+             loading={<div className="flex items-center justify-center h-96 w-full text-[#DAA520]"><LoaderIcon className="w-8 h-8 animate-spin" /></div>}
+             error={<div className="text-red-500 p-4 font-bold pixel-font">Error loading Scroll</div>}
+           >
+             <Page 
+               pageNumber={pageNumber} 
+               scale={scale}
+               renderTextLayer={true} // 必须为 true
+               renderAnnotationLayer={true} // 建议为 true 以支持链接
+               className="bg-white shadow-lg relative"
+               onRenderSuccess={() => setTimeout(captureCanvas, 300)}
+               onGetTextSuccess={() => setTextLayerReady(true)}
+             />
+             
+             {/* Highlight Overlay Layer */}
+             <div className="absolute inset-0 pointer-events-none z-20">
+               {highlights.map((h, i) => (
+                 <div
+                   key={i}
+                   className="highlight-overlay absolute bg-[#DAA520] mix-blend-multiply opacity-40 border-b-2 border-[#8B4513] shadow-[0_0_8px_rgba(218,165,32,0.8)]"
+                   style={{ left: h.left, top: h.top, width: h.width, height: h.height }}
+                 />
+               ))}
+             </div>
+           </Document>
         </div>
 
         {/* Context Menu */}
         {selectionMenu && (
-          <div className="fixed z-50 transform -translate-x-1/2 -translate-y-full mb-2 flex gap-1" style={{ left: selectionMenu.x, top: selectionMenu.y }}>
-             <div className="bg-[#2c1810] border-2 border-[#DAA520] p-1 rounded-lg shadow-xl flex gap-2">
-                <button onClick={() => { onTextSelected?.(selectionMenu.text, 'explain'); setSelectionMenu(null); }} className="px-3 py-1.5 bg-[#8B4513] hover:bg-[#DAA520] text-[#e8e4d9] text-xs font-bold rounded flex gap-1 pixel-font flex items-center">
-                  <InfoIcon className="w-3 h-3 mr-1" /> 解释
+          <div className="fixed z-50 transform -translate-x-1/2 -translate-y-full mb-2" style={{ left: selectionMenu.x, top: selectionMenu.y }}>
+             <div className="bg-[#2c1810] border-2 border-[#DAA520] p-1.5 rounded shadow-xl flex gap-2 animate-in fade-in zoom-in-95 duration-200">
+                <button onClick={() => { onTextSelected?.(selectionMenu.text, 'explain'); setSelectionMenu(null); }} className="px-3 py-1.5 bg-[#8B4513] hover:bg-[#DAA520] text-[#e8e4d9] hover:text-[#2c1810] text-xs font-bold rounded flex gap-1 pixel-font transition-colors items-center">
+                  <InfoIcon className="w-3 h-3" /> 解释
                 </button>
-                <button onClick={() => { onTextSelected?.(selectionMenu.text, 'save'); setSelectionMenu(null); }} className="px-3 py-1.5 bg-[#8B4513] hover:bg-[#DAA520] text-[#e8e4d9] text-xs font-bold rounded flex gap-1 pixel-font flex items-center">
-                  <StarIcon className="w-3 h-3 mr-1" /> 收藏
+                <button onClick={() => { onTextSelected?.(selectionMenu.text, 'save'); setSelectionMenu(null); }} className="px-3 py-1.5 bg-[#8B4513] hover:bg-[#DAA520] text-[#e8e4d9] hover:text-[#2c1810] text-xs font-bold rounded flex gap-1 pixel-font transition-colors items-center">
+                  <StarIcon className="w-3 h-3" /> 收藏
                 </button>
              </div>
              <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[6px] border-t-[#DAA520]"></div>
