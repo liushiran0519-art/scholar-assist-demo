@@ -7,7 +7,7 @@ import { PaperSummary, PageTranslation, CitationInfo, ChatMessage } from "../typ
 const API_KEY = import.meta.env.VITE_PROXY_API_KEY;
 
 // 2. 指定模型名称
-const MODEL_NAME = '[贩子死妈]gemini-3-flash-preview'; 
+const MODEL_NAME = 'gemini-3-flash-preview-真流-[星星公益站-CLI道]'; 
 
 // ================= 工具函数 =================
 
