@@ -74,8 +74,11 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
 
 
   // --- 🌟 核心高亮逻辑重写 (Normalized Mapping) 🌟 ---
+  // --- 🌟 核心高亮逻辑 (移植自 Translator.tsx 的优化版本) 🌟 ---
+  // 监听 highlightText 变化，计算坐标并滚动
   useEffect(() => {
-    if (!highlightText || highlightText.length < 3 || !textLayerReady || !pageContainerRef.current) {
+    // 1. 基础校验：如果没有高亮词、文本层未准备好或容器不存在，则清空高亮
+    if (!highlightText || highlightText.length < 2 || !textLayerReady || !pageContainerRef.current) {
       setHighlights([]);
       return;
     }
@@ -84,7 +87,7 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
       const textLayer = pageContainerRef.current?.querySelector('.react-pdf__Page__textContent');
       if (!textLayer) return;
 
-      // 1. 获取所有文本节点
+      // 2. 获取所有文本节点 (Text Nodes)
       const textNodes: Text[] = [];
       const walker = document.createTreeWalker(textLayer, NodeFilter.SHOW_TEXT);
       let node;
@@ -94,8 +97,8 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
       
       if (textNodes.length === 0) return;
 
-      // 2. 建立映射表：NormalizedString Index -> DOM Node & Offset
-      // 我们只提取字母和数字进行匹配，忽略空格、标点和换行
+      // 3. 建立映射表：归一化字符串索引 -> DOM 节点 & 偏移量
+      // 我们只提取字母、数字和中文进行匹配，忽略 PDF 中常见的乱码空格、换行
       let normalizedPdfText = "";
       const mapping: { node: Text; index: number }[] = [];
 
@@ -103,7 +106,7 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         const str = txtNode.textContent || "";
         for (let i = 0; i < str.length; i++) {
            const char = str[i];
-           // 只保留字母数字，甚至可以只保留字母，视需求而定
+           // 宽泛匹配正则：保留中文、英文、数字
            if (/[a-zA-Z0-9\u4e00-\u9fa5]/.test(char)) {
              normalizedPdfText += char.toLowerCase();
              mapping.push({ node: txtNode, index: i });
@@ -111,18 +114,18 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         }
       }
 
-      // 3. 处理查询词：同样进行归一化
-      // 注意：highlightText 来自 AI，可能只有前几个词，或者有OCR错误
-      // 我们取前 40 个有效字符进行搜索，足够定位了
+      // 4. 处理查询词：同样进行归一化
+      // 注意：highlightText 来自 AI，可能很长，我们只取前 40-50 个有效字符进行“模糊搜索”
+      // 这样即使 AI 翻译的后半段稍有出入，也能定位到段落开头
       const cleanQuery = highlightText.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '').toLowerCase();
-      const searchKey = cleanQuery.slice(0, 50); // 搜索前50个字符
+      const searchKey = cleanQuery.slice(0, 50); // 搜索前50个字符作为锚点
 
-      if (searchKey.length < 3) return;
+      if (searchKey.length < 2) return;
 
-      // 4. 在归一化字符串中搜索
+      // 5. 在归一化字符串中搜索
       let startIndex = normalizedPdfText.indexOf(searchKey);
       
-      // 容错：如果找不到，尝试截断前几个字符再找（防止首字母识别错误）
+      // 容错机制：如果找不到，尝试截断前 5 个字符再找（防止首字母OCR识别错误）
       if (startIndex === -1 && searchKey.length > 10) {
          startIndex = normalizedPdfText.indexOf(searchKey.slice(5)); 
       }
@@ -132,24 +135,18 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         return;
       }
 
-      // 5. 确定高亮范围
-      // 如果 AI 给的是整段，我们就高亮整段；如果只是前缀，我们稍微高亮长一点（比如150字符）作为视觉引导
-      // 这里根据 searchKey 的长度来决定，但因为 mapping 是一一对应的，我们至少高亮匹配到的部分
-      let lengthToHighlight = searchKey.length;
-      
-      // 视觉优化：如果原文很长，我们高亮整个句子可能更好，但我们不知道句子在哪结束。
-      // 这里简单策略：至少高亮匹配到的部分，最多延伸一点
-      
-      const endIndex = Math.min(startIndex + lengthToHighlight - 1, mapping.length - 1);
+      // 6. 确定高亮范围
+      // 我们至少高亮匹配到的部分，视觉上给用户一个反馈
+      const endIndex = Math.min(startIndex + searchKey.length - 1, mapping.length - 1);
       
       const startData = mapping[startIndex];
       const endData = mapping[endIndex];
 
-      // 6. 创建 Range 并获取矩形
+      // 7. 创建 Range 并获取矩形坐标
       const range = document.createRange();
       try {
         range.setStart(startData.node, startData.index);
-        range.setEnd(endData.node, endData.index + 1); // +1 包含最后一个字符
+        range.setEnd(endData.node, endData.index + 1);
         
         const rects = range.getClientRects();
         const pageElement = pageContainerRef.current?.querySelector('.react-pdf__Page');
@@ -160,7 +157,7 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         const newHighlights: HighlightRect[] = [];
         for (let i = 0; i < rects.length; i++) {
           const r = rects[i];
-          // 过滤掉不可见的杂乱矩形
+          // 过滤掉不可见或极小的杂乱矩形
           if (r.width < 1 || r.height < 1) continue;
           
           newHighlights.push({
@@ -172,23 +169,28 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         }
         setHighlights(newHighlights);
 
-        // 自动滚动到高亮处 (稍微延迟以等待渲染)
-        setTimeout(() => {
-           // 只在第一次找到时跳转，防止阅读时乱跳。这里简化处理，每次 update highlight 都跳。
-           // 如果体验不好，可以加一个 ref 记录 lastHighlightText
-           const highlightEl = document.querySelector('.highlight-overlay');
-           if (highlightEl) {
-               highlightEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // 8. [关键优化] 自动滚动到高亮处
+        if (newHighlights.length > 0) {
+           const firstRect = newHighlights[0];
+           if (pageContainerRef.current) {
+              const containerH = pageContainerRef.current.clientHeight;
+              // 计算滚动位置：将高亮元素置于视口中间偏上位置
+              const targetTop = firstRect.top - (containerH / 2) + 50;
+              
+              pageContainerRef.current.scrollTo({
+                  top: targetTop,
+                  behavior: 'smooth'
+              });
            }
-        }, 100);
+        }
 
       } catch (e) {
         console.error("Highlight Range Error:", e);
       }
     };
 
-    // 防抖执行
-    const timer = setTimeout(calculateHighlights, 100);
+    // 防抖执行，避免鼠标快速划过时频繁计算
+    const timer = setTimeout(calculateHighlights, 50);
     return () => clearTimeout(timer);
 
   }, [highlightText, textLayerReady, pageNumber, scale]);
@@ -276,16 +278,15 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
               />
               
               {/* Highlight Overlay Layer */}
-              <div className="absolute inset-0 pointer-events-none z-20">
-                {highlights.map((h, i) => (
-                  <div
-                    key={i}
-                    className="highlight-overlay absolute bg-yellow-400 mix-blend-multiply opacity-50 border-b-2 border-yellow-600 shadow-[0_0_5px_rgba(255,215,0,0.5)]"
-                    style={{ left: h.left, top: h.top, width: h.width, height: h.height }}
-                  />
-                ))}
-              </div>
-            </Document>
+        <div className="absolute inset-0 pointer-events-none z-20">
+          {highlights.map((h, i) => (
+            <div
+              key={i}
+              // 这里的颜色使用了类似第二个代码的金色/黄色，并且加了阴影
+              className="highlight-overlay absolute bg-[#DAA520] mix-blend-multiply opacity-40 border-b-2 border-[#8B4513] shadow-[0_0_8px_rgba(218,165,32,0.8)]"
+              style={{ left: h.left, top: h.top, width: h.width, height: h.height }}
+            />
+          ))}
         </div>
 
         {/* Context Menu */}
