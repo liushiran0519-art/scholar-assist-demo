@@ -11,6 +11,8 @@ import Translator from './components/Translator';
 import PDFViewer from './components/PDFViewer';
 import TranslationViewer from './components/TranslationViewer';
 import { UploadIcon, BookOpenIcon, XIcon, SettingsIcon, GripVerticalIcon, StarIcon } from './components/IconComponents';
+import { ScholarCatMascot, CatMood } from './components/ScholarCatMascot';
+
 
 const App: React.FC = () => {
   const [mode, setMode] = useState<AppMode>(AppMode.UPLOAD);
@@ -55,6 +57,10 @@ const App: React.FC = () => {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [isChatting, setIsChatting] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Scholar Cat State (新增)
+  const [catMood, setCatMood] = useState<CatMood>('IDLE');
+  const [catMessage, setCatMessage] = useState<string | null>(null);
 
   // --- 1. Session Restoration (App Mount) ---
   useEffect(() => {
@@ -151,6 +157,27 @@ const App: React.FC = () => {
     loadTranslation();
   }, [debouncedPage, fileFingerprint, mode, file]); // removed pageTranslations dependency to avoid loops
 
+  // --- Scholar Cat Mood Logic (新增) ---
+  useEffect(() => {
+    // 优先级逻辑：错误 > 聊天/思考 > 翻译/搜索 > 摘要 > 闲置
+    if (isChatting) {
+      setCatMood('THINKING');
+      setCatMessage("正在思考你的问题... (Thinking...)");
+    } else if (isTranslatingPage || isSummarizing || isAnalyzingCitation || isAnalyzingEquation) {
+      setCatMood('SEARCHING');
+      setCatMessage("正在解读古卷... (Deciphering...)");
+    } else if (fullText && !summary) {
+        // 如果有文本但没摘要（罕见情况，可能是刚上传完）
+        setCatMood('SUCCESS');
+        setCatMessage("卷轴读取完毕！(Ready!)");
+        setTimeout(() => setCatMessage(null), 3000);
+    } else {
+      setCatMood('IDLE');
+      // 闲置时偶尔清空消息
+      const timer = setTimeout(() => setCatMessage(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [isChatting, isTranslatingPage, isSummarizing, isAnalyzingCitation, isAnalyzingEquation, fullText, summary]);
 
   // --- File Upload ---
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -257,6 +284,13 @@ const App: React.FC = () => {
     } finally {
       setIsChatting(false);
     }
+  };
+
+  // 处理小猫点击事件（新增）
+  const handleCatClick = () => {
+    setCatMood('SUCCESS');
+    setCatMessage("喵呜！需要帮忙吗？(Meow!)");
+    setTimeout(() => setCatMood('IDLE'), 2000);
   };
 
   const resetApp = async () => {
@@ -411,12 +445,12 @@ const App: React.FC = () => {
           )}
         </div>
         
-        {/* Toast */}
-        {toastMessage && (
-          <div className="absolute bottom-8 right-8 z-50 animate-bounce bg-[#2c1810] text-[#DAA520] p-3 rounded-lg border-2 border-[#DAA520]">
-             {toastMessage}
-          </div>
-        )}
+        {/* Scholar Cat Mascot (Replced Toast) */}
+        <ScholarCatMascot 
+          mood={catMood} 
+          message={catMessage || toastMessage} 
+          onClick={handleCatClick}
+        />
       </div>
     </div>
   );
