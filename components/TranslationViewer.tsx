@@ -14,8 +14,6 @@ interface TranslationViewerProps {
   appearance: AppearanceSettings;
 }
 
-// --- LAZY BLOCK COMPONENT ---
-// Only renders the heavy content when within viewport
 const LazyBlock = ({ children, heightHint = 100 }: { children: React.ReactNode, heightHint?: number }) => {
   const [isVisible, setIsVisible] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -25,16 +23,12 @@ const LazyBlock = ({ children, heightHint = 100 }: { children: React.ReactNode, 
       ([entry]) => {
         if (entry.isIntersecting) {
           setIsVisible(true);
-          observer.disconnect(); // Once visible, stay visible
+          observer.disconnect(); 
         }
       },
-      { rootMargin: '300px' } // Pre-load 300px ahead
+      { rootMargin: '300px' } 
     );
-
-    if (containerRef.current) {
-      observer.observe(containerRef.current);
-    }
-
+    if (containerRef.current) observer.observe(containerRef.current);
     return () => observer.disconnect();
   }, []);
 
@@ -44,7 +38,6 @@ const LazyBlock = ({ children, heightHint = 100 }: { children: React.ReactNode, 
     </div>
   );
 };
-
 
 const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({ 
   translation, 
@@ -56,7 +49,6 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
   appearance
 }, ref) => {
 
-  // Dynamic Styles based on Appearance Settings
   const containerStyle = appearance.theme === 'sepia' 
     ? { backgroundColor: '#F4ECD8', color: '#433422' }
     : { backgroundColor: '#2c1810', color: '#e8e4d9' }; 
@@ -72,6 +64,17 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
 
   const tooltipBg = appearance.theme === 'sepia' ? 'bg-[#fffef0]' : 'bg-[#2c1810]';
   const tooltipText = appearance.theme === 'sepia' ? 'text-[#433422]' : 'text-[#e8e4d9]';
+
+  // 复制 LaTeX 功能
+  const copyLatex = (e: React.MouseEvent, latex: string) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(latex);
+    // 简单的视觉反馈
+    const btn = e.currentTarget as HTMLButtonElement;
+    const originalText = btn.innerText;
+    btn.innerText = "已复制 (COPIED!)";
+    setTimeout(() => { btn.innerText = originalText; }, 1500);
+  };
 
   if (isLoading) {
     return (
@@ -90,7 +93,7 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
         <p className="mb-4 pixel-font text-xs">卷轴内容空白</p>
         <button 
           onClick={onRetry}
-          className="px-4 py-2 rpg-btn text-xs font-bold"
+          className="px-4 py-2 rpg-btn text-xs font-bold bg-[#8B4513] text-[#DAA520] border-2 border-[#2c1810]"
         >
           重新施法 (Retry)
         </button>
@@ -98,11 +101,8 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
     );
   }
 
-  // Helper to render text with Glossary Tooltips
   const renderRichText = (text: string, glossary: GlossaryTerm[]) => {
-    // Safety check for huge text blocks to prevent freezing
     if (text.length > 5000) return <span>{text.slice(0, 500)}... (Text too long, truncated)</span>;
-
     const parts = text.split(/(\[\d+(?:-\d+)?(?:,\s*\d+)*\])/g);
     
     return parts.map((part, idx) => {
@@ -121,7 +121,6 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
       }
 
       let segments: React.ReactNode[] = [part];
-      
       glossary.forEach(g => {
         const term = g.term;
         const newSegments: React.ReactNode[] = [];
@@ -137,7 +136,6 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
                         {sp}
                         <span className="text-[10px] opacity-70">✨</span>
                      </span>
-                     
                      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-3 w-56 hidden group-hover/glossary:block z-50 pointer-events-none tooltip-anim">
                        <div className={`${tooltipBg} ${tooltipText} p-3 rounded-lg border-2 border-[#DAA520] shadow-xl relative`}>
                           <p className="pixel-font text-[10px] text-[#DAA520] mb-1 uppercase tracking-wider">Scholar Cat Note:</p>
@@ -147,17 +145,12 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
                      </span>
                    </span>
                  );
-               } else {
-                 newSegments.push(sp);
-               }
+               } else { newSegments.push(sp); }
             });
-          } else {
-            newSegments.push(seg);
-          }
+          } else { newSegments.push(seg); }
         });
         segments = newSegments;
       });
-
       return <span key={idx}>{segments}</span>;
     });
   };
@@ -188,13 +181,8 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
             className={`group relative p-3 transition-colors cursor-pointer z-10 rounded hover:bg-black/5`}
             onMouseEnter={() => onHoverBlock(block.en)}
             onMouseLeave={() => onHoverBlock(null)}
-            onClick={(e) => {
-              if (block.type === 'equation') {
-                e.stopPropagation();
-                onEquationClick(block.en);
-              }
-            }}
           >
+            {/* 左侧装饰条 */}
             <div className={`absolute left-0 top-3 bottom-3 w-1 opacity-0 group-hover:opacity-100 transition-opacity rounded-full ${appearance.theme === 'sepia' ? 'bg-[#8B4513]' : 'bg-[#DAA520]'}`} />
             
             {block.type === 'heading' && (
@@ -217,14 +205,28 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
               </div>
             )}
 
+            {/* ✅ 【问题4修复】公式单独展示 + 复制按钮 */}
+            {/* 假设 AI 返回的 type 为 'equation' 或翻译文本中包含公式 */}
             {block.type === 'equation' && (
-              <div className={`my-4 p-4 border-2 text-center font-mono text-sm overflow-x-auto relative group/eq rounded shadow-inner ${appearance.theme === 'sepia' ? 'bg-[#fffef0] border-[#8B4513] text-[#2c1810]' : 'bg-[#1a0f0a] border-[#DAA520] text-[#DAA520]'}`}>
-                <div className={`absolute top-1 right-2 text-[10px] opacity-0 group-hover/eq:opacity-100 pixel-font p-1 border cursor-pointer ${appearance.theme === 'sepia' ? 'bg-[#fffef0] border-[#8B4513]' : 'bg-[#2c1810] border-[#DAA520]'}`}>
-                  点击解构 (DECONSTRUCT)
+              <div className={`my-4 p-4 border-2 text-center relative group/eq rounded shadow-inner ${appearance.theme === 'sepia' ? 'bg-[#fffef0] border-[#8B4513] text-[#2c1810]' : 'bg-[#1a0f0a] border-[#DAA520] text-[#DAA520]'}`}>
+                
+                {/* 顶部标签 */}
+                <div className="flex justify-between items-center mb-2 border-b border-dashed border-opacity-30 pb-1" style={{borderColor: 'currentColor'}}>
+                    <span className="text-[10px] opacity-50 pixel-font">SPELL FORMULA</span>
+                    {/* 复制按钮 */}
+                    <button 
+                       onClick={(e) => copyLatex(e, block.en)} // block.en 通常存储原始 Latex
+                       className={`text-[9px] font-bold px-2 py-1 border rounded hover:opacity-80 transition-opacity ${appearance.theme === 'sepia' ? 'bg-[#8B4513] text-[#e8e4d9]' : 'bg-[#DAA520] text-[#2c1810]'}`}
+                    >
+                       复制咒语 (COPY LATEX)
+                    </button>
                 </div>
-                <p className="text-[10px] opacity-50 mb-1 text-left pixel-font">SPELL FORMULA</p>
+
+                {/* 渲染公式 */}
                 <div 
-                  className="overflow-x-auto overflow-y-hidden py-2"
+                  className="overflow-x-auto overflow-y-hidden py-2 cursor-help"
+                  onClick={(e) => { e.stopPropagation(); onEquationClick(block.en); }}
+                  title="点击解析公式含义"
                   dangerouslySetInnerHTML={{ 
                     __html: katex.renderToString(block.en, { 
                       throwOnError: false, 
@@ -233,6 +235,8 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
                     }) 
                   }} 
                 />
+
+                {/* 公式解释/中文翻译 */}
                 <p className="mt-2 text-xs text-left border-t pt-1 italic opacity-80" style={{borderColor: 'currentColor'}}>
                   {block.cn !== '公式' ? block.cn : '此处为数学咒语'}
                 </p>
