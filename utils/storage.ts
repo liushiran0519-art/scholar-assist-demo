@@ -77,6 +77,10 @@ export const saveSummary = async (fingerprint: string, name: string, summary: Pa
     createdAt: Date.now()
   });
 };
+export const deleteSummary = async (fingerprint: string) => {
+  const db = await getDB();
+  await db.delete('files', fingerprint);
+};
 
 export const getSummary = async (fingerprint: string) => {
   const db = await getDB();
@@ -102,6 +106,11 @@ export const getPageTranslation = async (fingerprint: string, pageNumber: number
   const id = `${fingerprint}_${pageNumber}`;
   const record = await db.get('translations', id);
   return record ? record.data : null;
+};
+export const deletePageTranslation = async (fingerprint: string, pageNumber: number) => {
+  const db = await getDB();
+  const id = `${fingerprint}_${pageNumber}`;
+  await db.delete('translations', id);
 };
 
 // --- Session Operations (Persistence) ---
