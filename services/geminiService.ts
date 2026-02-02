@@ -70,7 +70,101 @@ async function callProxyApi(messages: any[], jsonMode = false) {
     throw error;
   }
 }
+export const extractGlossary = async (firstPageText: string): Promise<{term: string, definition: string}[]> => {
+  const prompt = `
+    Analyze the following academic text (first page). 
+    Identify 5-10 key technical terms or acronyms specific to this paper.
+    Return JSON: { "glossary": [{ "term": "Term", "definition": "Brief Chinese explanation" }] }
+    Input:
+    ${firstPageText.slice(0, 3000)}
+  `;
+  try {
+    const text = await callProxyApi([{ role: "user", content: prompt }], true);
+    const json = JSON.parse(cleanJson(text));
+    return json.glossary || [];
+  } catch (e) {
+    console.error("Glossary extraction failed", e);
+    return [];
+  }
+};
 
+// 新增：流式聊天 (Generator)
+export async function* chatWithPaperStream(
+  history: { role: 'user' | 'model'; text: string }[], 
+  newMessage: string, 
+  ragContext: string // 传入 RAG 检索到的上下文
+): AsyncGenerator<string, void, unknown> {
+  
+  const API_KEY = import.meta.env.VITE_PROXY_API_KEY;
+  // const MODEL_NAME = 'gemini-1.5-flash'; // 确保使用支持流式的模型
+  
+  // 构造增强的 Prompt
+  const systemPrompt = `You are Scholar Cat. Answer the user's question based strictly on the provided Context.
+  If the answer is not in the context, say "文中未提及".
+  End your answer with "喵~".`;
+
+  const userContent = `
+  Context (Retrieved from paper):
+  ${ragContext}
+
+  User Question: ${newMessage}
+  `;
+
+  const messages = [
+    { role: "system", content: systemPrompt },
+    ...history.slice(-4).map(h => ({ role: h.role === 'model' ? 'assistant' : 'user', content: h.text })),
+    { role: "user", content: userContent }
+  ];
+
+  try {
+    const response = await fetch('/api/proxy', {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${API_KEY}`
+      },
+      body: JSON.stringify({
+        model: "gemini-1.5-flash", // 或 deepseek-chat
+        messages: messages,
+        stream: true // ✅ 开启流式
+      })
+    });
+
+    const reader = response.body?.getReader();
+    const decoder = new TextDecoder();
+    if (!reader) throw new Error("No reader");
+
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      const chunk = decoder.decode(value, { stream: true });
+      // 处理 SSE 格式 (data: {...})
+      // 注意：具体的解析逻辑取决于您的 Proxy/LLM 接口返回格式
+      // 这里假设是标准的 OpenAI 格式
+      const lines = (buffer + chunk).split('\n');
+      buffer = lines.pop() || ""; // 保留未完成的行
+
+      for (const line of lines) {
+        if (line.trim() === 'data: [DONE]') return;
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            const content = data.choices[0]?.delta?.content || "";
+            if (content) yield content;
+          } catch (e) {
+            // 忽略解析错误
+          }
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Stream Error:", error);
+    yield "网络连接中断 (Stream Error)";
+  }
+}
 // ================= 核心业务函数 =================
 
 export const generatePaperSummary = async (fullText: string): Promise<PaperSummary> => {
