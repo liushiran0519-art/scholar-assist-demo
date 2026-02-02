@@ -2,13 +2,13 @@ import React, { forwardRef, useState, useEffect, useRef } from 'react';
 import { PageTranslation, ContentBlock, GlossaryTerm, AppearanceSettings } from '../types';
 import GamifiedLoader from './GamifiedLoader';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm'; 
+import remarkGfm from 'remark-gfm';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 
-// 引入 RPG 风格图标
-import { InfoIcon, FlameIcon, FlaskIcon, SparklesIcon, TrophyIcon } from './IconComponents'; 
+import { InfoIcon, FlameIcon, FlaskIcon, SparklesIcon, TrophyIcon, FileTextIcon, UploadIcon } from './IconComponents'; 
 
+// --- 类型定义 ---
 interface TranslationViewerProps {
   translation: PageTranslation | undefined;
   isLoading: boolean;
@@ -20,20 +20,40 @@ interface TranslationViewerProps {
   highlightText?: string | null;
 }
 
-// 懒加载容器
+// --- 辅助工具：下载文件 ---
+const downloadFile = (content: string, filename: string, type: string) => {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+// --- 辅助工具：HTML表格转CSV ---
+const tableToCSV = (table: HTMLTableElement) => {
+  const rows = Array.from(table.querySelectorAll('tr'));
+  return rows.map(row => {
+    const cells = Array.from(row.querySelectorAll('th, td'));
+    return cells.map(cell => {
+      const text = cell.textContent?.replace(/"/g, '""') || '';
+      return `"${text}"`;
+    }).join(',');
+  }).join('\n');
+};
+
+// --- 懒加载容器 ---
 const LazyBlock = ({ children, heightHint = 100 }: { children: React.ReactNode, heightHint?: number }) => {
   const [isVisible, setIsVisible] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setIsVisible(true);
-          observer.disconnect(); 
-        }
-      },
-      { rootMargin: '400px' } 
+      ([entry]) => { if (entry.isIntersecting) { setIsVisible(true); observer.disconnect(); } },
+      { rootMargin: '600px' } 
     );
     if (containerRef.current) observer.observe(containerRef.current);
     return () => observer.disconnect();
@@ -62,7 +82,6 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
   // --- 高亮联动 ---
   useEffect(() => {
     if (!highlightText || !translation || !containerRef.current) return;
-    // 简单的模糊匹配清洗
     const cleanSearch = highlightText.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '').toLowerCase().slice(0, 50);
     if (cleanSearch.length < 3) return;
 
@@ -81,7 +100,6 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
     }
   }, [highlightText, translation]);
 
-  // --- 样式定义 ---
   const isSepia = appearance.theme === 'sepia';
   const styles = {
     container: isSepia 
@@ -96,8 +114,100 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
     }
   };
 
+  // --- 自定义 Markdown 组件 (包含表格导出逻辑) ---
+  const MarkdownComponents = {
+    table: ({node, ...props}: any) => {
+      const tableRef = useRef<HTMLTableElement>(null);
+      
+      const handleExport = () => {
+        if (tableRef.current) {
+          const csv = tableToCSV(tableRef.current);
+          downloadFile(csv, `table_${Date.now()}.csv`, 'text/csv;charset=utf-8;');
+        }
+      };
+
+      return (
+        <div className="relative group my-8" style={{fontFamily: 'sans-serif'}}>
+          {/* 表格工具栏 */}
+          <div className="flex justify-between items-center bg-black/10 px-3 py-1 rounded-t-lg border-t-2 border-l-2 border-r-2" 
+               style={{borderColor: styles.borderColor}}>
+             <span className="text-[10px] font-bold opacity-60 uppercase tracking-widest pixel-font" style={{color: styles.accentColor}}>Data Grid</span>
+             <button 
+               onClick={handleExport}
+               className="text-[10px] flex items-center gap-1 font-bold hover:underline transition-all"
+               style={{color: styles.accentColor}}
+               title="Export as CSV"
+             >
+               💾 Save CSV
+             </button>
+          </div>
+          {/* 表格主体 */}
+          <div className="overflow-x-auto rounded-b-lg shadow-md border-2 border-t-0" style={{ borderColor: styles.borderColor }}>
+            <table ref={tableRef} className="w-full text-sm text-left border-collapse" {...props} />
+          </div>
+        </div>
+      );
+    },
+    thead: ({node, ...props}: any) => (
+      <thead className="uppercase pixel-font text-xs font-bold" 
+             style={{ backgroundColor: isSepia ? '#e8e4d9' : '#3e2723', color: styles.accentColor }} {...props} />
+    ),
+    tbody: ({node, ...props}: any) => <tbody className="font-serif" {...props} />,
+    tr: ({node, ...props}: any) => (
+      <tr className={`border-b last:border-0 hover:bg-black/5 transition-colors`} 
+          style={{ borderColor: styles.borderColor + '40' }} {...props} />
+    ),
+    th: ({node, ...props}: any) => <th className="px-4 py-3 whitespace-nowrap border-r last:border-r-0" style={{borderColor: styles.borderColor+'40'}} {...props} />,
+    td: ({node, ...props}: any) => <td className="px-4 py-2 border-r last:border-r-0" style={{borderColor: styles.borderColor+'40'}} {...props} />,
+  };
+
+  // --- 特殊渲染器：公式 (Equation) ---
+  const renderEquation = (latex: string, explanation: string) => {
+    const handleCopy = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(latex);
+    };
+    const handleDownload = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      downloadFile(latex, `equation_${Date.now()}.tex`, 'text/plain');
+    };
+
+    return (
+      <div className={`my-8 mx-1 p-4 rounded-xl border-2 shadow-md group relative overflow-hidden`}
+           style={{ backgroundColor: isSepia ? '#fffef0' : '#1e120d', borderColor: styles.borderColor }}>
+          
+          <div className="flex justify-between items-center mb-3 pb-2 border-b border-dashed" style={{borderColor: styles.borderColor+'40'}}>
+              <span className="text-[10px] font-bold pixel-font uppercase opacity-50 tracking-widest" style={{color: styles.accentColor}}>Arcane Formula</span>
+              <div className="flex gap-2">
+                <button onClick={handleDownload} title="Save .tex" className="hover:scale-110 transition-transform">💾</button>
+                <button onClick={handleCopy} title="Copy LaTeX" className="hover:scale-110 transition-transform">📋</button>
+                <button 
+                   onClick={(e) => { e.stopPropagation(); onEquationClick(latex); }} 
+                   className={`flex items-center gap-1 text-[10px] font-bold px-3 py-0.5 border rounded-full hover:bg-[#DAA520] hover:text-[#2c1810] transition-all cursor-pointer`}
+                   style={{ borderColor: styles.borderColor, color: styles.accentColor }}
+                >
+                   <FlaskIcon className="w-3 h-3" />
+                   <span>解析</span>
+                </button>
+              </div>
+          </div>
+
+          <div 
+            className="overflow-x-auto overflow-y-hidden py-2 text-center"
+            dangerouslySetInnerHTML={{ __html: katex.renderToString(latex, { throwOnError: false, displayMode: true, output: 'html' }) }} 
+          />
+
+          <div className="mt-4 pt-3 flex gap-3 text-sm italic opacity-90 font-serif leading-relaxed" style={{color: styles.container.color}}>
+             <div className="mt-1 shrink-0 opacity-70"><InfoIcon className="w-4 h-4" /></div>
+             <p>{explanation}</p>
+          </div>
+      </div>
+    );
+  };
+
   // --- 特殊渲染器：视觉遗物 (Visual Artifact) ---
   const renderVisualArtifact = (text: string) => {
+    const isDetectedPlaceholder = text.includes("Visual Content Detected") || text.includes("图表区域");
     return (
       <div className={`my-8 mx-2 relative group overflow-hidden rounded-xl border-2 border-dashed transition-all hover:scale-[1.01] hover:shadow-lg`}
            style={{ borderColor: styles.borderColor, backgroundColor: isSepia ? 'rgba(139, 69, 19, 0.03)' : 'rgba(218, 165, 32, 0.05)' }}>
@@ -108,65 +218,37 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
 
         <div className="flex flex-col items-center justify-center p-6 text-center">
            <div className="mb-3 p-3 rounded-full bg-black/5 border-2" style={{borderColor: styles.borderColor}}>
-              <span className="text-2xl animate-pulse">🖼️</span>
+              {isDetectedPlaceholder ? <span className="text-2xl animate-pulse">🖼️</span> : <span className="text-2xl">📊</span>}
            </div>
            
            <h4 className="pixel-font text-xs font-bold uppercase mb-2 tracking-widest" style={{color: styles.accentColor}}>
-             Visual Archive (视觉档案)
+             {isDetectedPlaceholder ? "Visual Archive (视觉档案)" : "Figure / Chart"}
            </h4>
            
            <p className="font-serif text-sm italic opacity-80 max-w-md">
-             {text.replace(/\[.*?\]/g, '') || "此处检测到复杂的视觉内容（图表、公式或插图）。请查阅左侧原始卷轴以获取完整信息。"}
+             {text.replace(/\[.*?\]/g, '') || "此处检测到复杂的视觉内容。请查阅左侧原始卷轴。"}
            </p>
 
-           <div className="mt-4 px-4 py-1 text-[10px] border rounded-full opacity-60 flex items-center gap-2" style={{borderColor: styles.borderColor}}>
-              <span>👀</span><span>Look Left (请看左侧)</span>
+           <div className="mt-4 flex gap-3">
+             <div className="px-4 py-1 text-[10px] border rounded-full opacity-60 flex items-center gap-2 cursor-help" title="查看左侧 PDF 原文" style={{borderColor: styles.borderColor}}>
+                <span>👀</span><span>Look Left</span>
+             </div>
            </div>
         </div>
       </div>
     );
   };
 
-  // --- 自定义 Markdown 表格渲染器 ---
-  const MarkdownComponents = {
-    // 表格容器
-    table: ({node, ...props}: any) => (
-      <div className="overflow-x-auto my-6 rounded-lg shadow-md border-2" style={{ borderColor: styles.borderColor }}>
-        <table className="w-full text-sm text-left border-collapse" {...props} />
-      </div>
-    ),
-    // 表头
-    thead: ({node, ...props}: any) => (
-      <thead className="uppercase pixel-font text-xs font-bold" 
-             style={{ backgroundColor: isSepia ? '#e8e4d9' : '#3e2723', color: styles.accentColor }} {...props} />
-    ),
-    tbody: ({node, ...props}: any) => <tbody className="font-serif" {...props} />,
-    // 行
-    tr: ({node, ...props}: any) => (
-      <tr className={`border-b last:border-0 hover:bg-black/5 transition-colors`} 
-          style={{ borderColor: styles.borderColor + '40' }} {...props} />
-    ),
-    th: ({node, ...props}: any) => <th className="px-4 py-3 whitespace-nowrap border-r last:border-r-0" style={{borderColor: styles.borderColor+'40'}} {...props} />,
-    td: ({node, ...props}: any) => <td className="px-4 py-2 border-r last:border-r-0" style={{borderColor: styles.borderColor+'40'}} {...props} />,
-    // 引用块 (Blockquote) -> 变成 "Note" 风格
-    blockquote: ({node, ...props}: any) => (
-      <div className="my-4 pl-4 border-l-4 italic opacity-80" style={{ borderColor: styles.accentColor, backgroundColor: isSepia ? 'rgba(0,0,0,0.02)' : 'rgba(255,255,255,0.05)' }}>
-         <blockquote {...props} />
-      </div>
-    ),
-  };
-
-  // --- 富文本处理 ---
+  // --- 富文本 ---
   const renderRichText = (text: string) => {
     if (!text) return null;
     const parts = text.split(/(\[\d+(?:-\d+)?(?:,\s*\d+)*\])/g);
     return parts.map((part, idx) => {
-      // 引用标记 [1]
       if (/^\[\d+(?:-\d+)?(?:,\s*\d+)*\]$/.test(part)) {
         const id = part.replace(/[\[\]]/g, '').split(',')[0].split('-')[0]; 
         return (
           <sup key={idx} onClick={(e) => { e.stopPropagation(); onCitationClick(id); }}
-            className="cursor-pointer font-bold mx-0.5 px-1 rounded hover:scale-110 inline-block border border-dashed"
+            className="cursor-pointer font-bold mx-0.5 px-1 rounded transition-colors hover:scale-110 inline-block border border-dashed"
             style={{ color: styles.accentColor, borderColor: styles.borderColor }}
           >{part}</sup>
         );
@@ -175,12 +257,9 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
     });
   };
 
-  // --- Block 渲染主逻辑 ---
+  // --- 主 Block 渲染 ---
   const renderBlockContent = (block: ContentBlock, idx: number) => {
-    // 1. 特殊检测：如果内容是我们在 PDF 解析层注入的 "Visual Content" 标记
-    if (block.cn.includes("VISUAL_CONTENT") || block.type === 'figure') {
-       return renderVisualArtifact(block.cn);
-    }
+    if (block.cn.includes("VISUAL_CONTENT") || block.type === 'figure') return renderVisualArtifact(block.cn);
 
     switch (block.type) {
       case 'title':
@@ -192,71 +271,43 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
         );
       case 'heading':
         return (
-          <div className="mt-10 mb-4 flex items-end gap-3 pb-2 border-b" style={{borderColor: styles.borderColor + '40'}}>
+          <div className="mt-12 mb-4 flex items-end gap-3 pb-2 border-b" style={{borderColor: styles.borderColor + '40'}}>
             <span className="text-2xl" style={{color: styles.accentColor}}>§</span>
             <h3 className="text-lg font-bold leading-none uppercase tracking-wide" style={{ ...styles.font, color: styles.accentColor }}>{block.cn}</h3>
           </div>
         );
       case 'equation':
-         return (
-            <div className={`my-8 mx-1 p-4 rounded-xl border-2 shadow-md group/eq relative overflow-hidden`}
-                 style={{ backgroundColor: isSepia ? '#fffef0' : '#1e120d', borderColor: styles.borderColor }}>
-                <div className="flex justify-between items-center mb-3">
-                    <span className="text-[10px] font-bold pixel-font uppercase opacity-50 tracking-widest" style={{color: styles.accentColor}}>Arcane Formula</span>
-                    <button onClick={(e) => { e.stopPropagation(); onEquationClick(block.en); }} className="flex items-center gap-1 text-[10px] font-bold px-3 py-1 border rounded-full hover:bg-black/10 transition-all cursor-pointer z-10" style={{ borderColor: styles.borderColor, color: styles.accentColor }}>
-                       <FlaskIcon className="w-3 h-3" /><span>解析</span>
-                    </button>
-                </div>
-                <div className="overflow-x-auto overflow-y-hidden py-2 text-center"
-                  dangerouslySetInnerHTML={{ __html: katex.renderToString(block.en, { throwOnError: false, displayMode: true, output: 'html' }) }} 
-                />
-                <div className="mt-4 pt-3 border-t border-dashed flex gap-3" style={{borderColor: styles.borderColor + '60'}}>
-                   <div className="mt-1 shrink-0"><InfoIcon className="w-4 h-4 opacity-70" /></div>
-                   <p className="text-sm italic opacity-90 font-serif leading-relaxed">{block.cn}</p>
-                </div>
-            </div>
-         );
+         return renderEquation(block.en, block.cn);
       case 'list':
         return (
             <div className="pl-2 my-4">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-                        li: ({node, ...props}) => (
-                            <li className="list-none relative pl-6 mb-2 leading-relaxed" style={{ ...styles.font }}>
-                                <span className="absolute left-0 top-2 w-1.5 h-1.5 rounded-full" style={{backgroundColor: styles.accentColor}}></span>
-                                <span style={{ color: styles.container.color }}>{props.children}</span>
-                            </li>
-                        )
-                    }}
-                >{block.cn}</ReactMarkdown>
+                    li: ({node, ...props}) => (
+                        <li className="list-none relative pl-6 mb-2 leading-relaxed" style={{ ...styles.font }}>
+                            <span className="absolute left-0 top-2 w-1.5 h-1.5 rounded-full" style={{backgroundColor: styles.accentColor}}></span>
+                            <span style={{ color: styles.container.color }}>{props.children}</span>
+                        </li>
+                    )
+                }}>{block.cn}</ReactMarkdown>
             </div>
         )
       case 'paragraph':
       default:
-        // 2. 表格检测：如果内容看起来像 Markdown 表格 (有 | )，使用 ReactMarkdown 渲染
-        // 注意：我们在 PDFUtils 里强制把表格行变成了 "| A | B |" 格式
-        if (block.cn.includes('|') || block.type === 'figure') { 
-           return (
-             <div className="my-4">
-               <ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>{block.cn}</ReactMarkdown>
-             </div>
-           );
+        // 表格检测
+        if ((block.cn.includes('|') && block.cn.includes('---')) || block.cn.trim().startsWith('|')) {
+           return <div className="my-4"><ReactMarkdown remarkPlugins={[remarkGfm]} components={MarkdownComponents}>{block.cn}</ReactMarkdown></div>;
         }
-        // 普通文本
-        return (
-           <p className="mb-4 text-justify indent-8 leading-loose" style={styles.font}>
-              {renderRichText(block.cn)}
-           </p>
-        );
+        return <p className="mb-4 text-justify indent-8 leading-loose" style={styles.font}>{renderRichText(block.cn)}</p>;
     }
   };
 
+  // --- Loading / Empty 状态 ---
   if (isLoading) return <div className="h-full flex items-center justify-center relative" style={styles.container}><GamifiedLoader /></div>;
-
   if (!translation || translation.blocks.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-6 text-center space-y-6" style={styles.container}>
         <div className="opacity-50 text-6xl">📜</div>
-        <h3 className="text-lg font-bold pixel-font mb-2">卷轴空白 (BLANK)</h3>
+        <h3 className="text-lg font-bold pixel-font mb-2">卷轴空白</h3>
         <button onClick={onRetry} className="px-8 py-3 rounded-lg font-bold pixel-font border-2 group" style={{ backgroundColor: styles.accentColor, color: isSepia ? '#e8e4d9' : '#2c1810', borderColor: styles.container.color }}>
           <span className="group-hover:animate-spin">↻</span> 重新施法
         </button>
@@ -272,14 +323,18 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
     >
       <div className="absolute inset-0 pointer-events-none opacity-5 z-0 mix-blend-multiply" style={{backgroundImage: 'url("https://www.transparenttextures.com/patterns/paper.png")'}}></div>
       
-      {/* 顶部固定栏 */}
+      {/* 顶部栏 */}
       <div className={`sticky top-0 z-20 mb-6 pb-2 border-b-2 flex justify-between items-center backdrop-blur-md transition-colors duration-300`} 
            style={{ borderColor: styles.borderColor, backgroundColor: isSepia ? 'rgba(244, 236, 216, 0.85)' : 'rgba(44, 24, 16, 0.85)' }}>
         <div className="flex items-center gap-2"><span className="text-xl">📜</span><h3 className="text-xs font-bold pixel-font uppercase" style={{ color: styles.accentColor }}>Chapter {translation.pageNumber}</h3></div>
         <button onClick={onRetry} className="text-[10px] font-bold pixel-font flex items-center gap-1 px-3 py-1.5 rounded-full border transition-all hover:bg-black/5 active:scale-95" style={{ color: styles.accentColor, borderColor: styles.borderColor }}><span>↻</span> RECAST</button>
       </div>
       
-      <div className="relative z-10 space-y-6 max-w-3xl mx-auto pb-20">
+      {/* 
+         ✅ 核心修复：pb-40 (增加底部 Padding)
+         确保最后的内容不会被底部的悬浮猫或解析面板遮挡
+      */}
+      <div className="relative z-10 space-y-6 max-w-3xl mx-auto pb-40">
         {translation.blocks.map((block, idx) => (
             <LazyBlock key={idx} heightHint={block.type === 'paragraph' ? 100 : 200}>
             <div 
@@ -288,15 +343,11 @@ const TranslationViewer = forwardRef<HTMLDivElement, TranslationViewerProps>(({
                 onMouseEnter={() => block.en && block.en.length > 5 && onHoverBlock(block.en)}
                 onMouseLeave={() => onHoverBlock(null)}
             >
-                {/* 悬停指示条 */}
                 <div className="absolute left-[-12px] top-4 bottom-4 w-1 opacity-0 group-hover:opacity-100 transition-all duration-300 rounded-full scale-y-0 group-hover:scale-y-100 origin-center shadow-[0_0_5px_currentColor]" style={{ backgroundColor: styles.accentColor, color: styles.accentColor }} />
-                
                 {renderBlockContent(block, idx)}
             </div>
             </LazyBlock>
         ))}
-        {/* 页脚装饰 */}
-        <div className="text-center opacity-30 mt-10"><span className="text-xl">❦</span></div>
       </div>
     </div>
   );
