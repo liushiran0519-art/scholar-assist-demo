@@ -124,7 +124,10 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         }
       }
 
+      // 1. 清洗完整的查询字符串（用于计算长度）
       const cleanQuery = highlightText.replace(/[^a-zA-Z0-9\u4e00-\u9fa5]/g, '').toLowerCase();
+      
+      // 2. 截取前50个字符作为搜索定位的 Key（用于快速定位起点）
       const searchKey = cleanQuery.slice(0, 50); 
 
       if (searchKey.length < 3) return;
@@ -139,7 +142,9 @@ const PDFViewer = forwardRef<HTMLDivElement, PDFViewerProps>(({
         return;
       }
 
-      const endIndex = Math.min(startIndex + searchKey.length - 1, mapping.length - 1);
+      // ✅ 修复点：结束索引应该基于完整文本(cleanQuery)的长度，而不是搜索Key(searchKey)的长度
+      const endIndex = Math.min(startIndex + cleanQuery.length - 1, mapping.length - 1);
+      
       const startData = mapping[startIndex];
       const endData = mapping[endIndex];
 
